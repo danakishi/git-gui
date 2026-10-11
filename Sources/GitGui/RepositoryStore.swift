@@ -73,13 +73,26 @@ final class RepositoryStore {
     // MARK: Persistence
 
     private func load() {
+        // Debug launch with `--repo=<path>`: show only that repository and leave the list untouched.
+        if let path = DebugScreenshot.repoPath {
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+            let entry = RepositoryEntry(id: UUID(), path: url.path, name: url.lastPathComponent)
+            entries = [entry]
+            selectedID = entry.id
+            isTransient = true
+            return
+        }
         guard let data = try? Data(contentsOf: fileURL),
               let list = try? JSONDecoder().decode([RepositoryEntry].self, from: data) else { return }
         entries = list
         selectedID = list.first?.id
     }
 
+    /// The list is overridden by a debug flag; nothing is written to disk.
+    private var isTransient = false
+
     private func save() {
+        guard !isTransient else { return }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? enc.encode(entries) else { return }

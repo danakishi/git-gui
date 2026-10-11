@@ -135,6 +135,25 @@ public enum GitParsers {
         return WorkingTreeStatus(branch: branch, upstream: upstream, ahead: ahead, behind: behind, entries: entries)
     }
 
+    // MARK: git stash list
+
+    /// `%gd` is `stash@{N}`, `%H` the sha, `%at` the date, `%gs` the reflog message.
+    public static let stashFormat = "%gd%x00%H%x00%at%x00%gs"
+
+    public static func parseStashList(_ text: String) -> [StashEntry] {
+        var result: [StashEntry] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let f = line.split(separator: fieldSeparator, maxSplits: 3, omittingEmptySubsequences: false)
+            guard f.count == 4, let at = TimeInterval(f[2]) else { continue }
+            // "stash@{3}" → 3
+            let digits = f[0].drop { !$0.isNumber }.prefix { $0.isNumber }
+            guard let index = Int(digits) else { continue }
+            result.append(StashEntry(index: index, sha: String(f[1]),
+                                     date: Date(timeIntervalSince1970: at), message: String(f[3])))
+        }
+        return result
+    }
+
     private static func change(_ c: Character?) -> StatusEntry.Change {
         c.flatMap(StatusEntry.Change.init(rawValue:)) ?? .unmodified
     }

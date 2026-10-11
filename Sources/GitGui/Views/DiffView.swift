@@ -1,9 +1,20 @@
 import GitCore
 import SwiftUI
 
+/// Hunk actions in the header: stage/unstage and discard.
+struct HunkActions {
+    /// Label of the primary button, e.g. "Stage".
+    let primaryTitle: String
+    let primaryIcon: String
+    let primary: (DiffHunk) -> Void
+    /// Discards the hunk; `nil` if not applicable (for example, for the index).
+    let discard: ((DiffHunk) -> Void)?
+}
+
 /// View of a single file's diff: hunks, line numbers, highlighting.
 struct DiffView: View {
     let file: FileDiff
+    var hunkActions: HunkActions?
 
     var body: some View {
         if file.isBinary {
@@ -11,17 +22,21 @@ struct DiffView: View {
         } else if file.hunks.isEmpty {
             ContentUnavailableView(emptyTitle, systemImage: "doc")
         } else {
-            ScrollView([.vertical, .horizontal]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(file.hunks) { hunk in
-                        HunkHeader(text: hunk.header)
-                        ForEach(hunk.lines) { line in
-                            DiffLineView(line: line)
+            // GeometryReader provides the width of the area: otherwise, in a two-axis ScrollView,
+            // the content is narrower than the window and hunk headers don't stretch to full width.
+            GeometryReader { geo in
+                ScrollView([.vertical, .horizontal]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(file.hunks) { hunk in
+                            HunkHeader(text: hunk.header, hunk: hunk, actions: hunkActions)
+                            ForEach(hunk.lines) { line in
+                                DiffLineView(line: line)
+                            }
                         }
                     }
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(minWidth: geo.size.width, alignment: .leading)
                 }
-                .font(.system(size: 12, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(nsColor: .textBackgroundColor))
         }
@@ -38,13 +53,38 @@ struct DiffView: View {
 
 private struct HunkHeader: View {
     let text: String
+    let hunk: DiffHunk
+    let actions: HunkActions?
+
     var body: some View {
-        Text(text)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentColor.opacity(0.08))
+        HStack(spacing: 6) {
+            Text(text)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if let actions {
+                if let discard = actions.discard {
+                    Button {
+                        discard(hunk)
+                    } label: {
+                        Label("Discard", systemImage: "arrow.uturn.backward")
+                    }
+                    .help("Discard this hunk in the working tree")
+                }
+                Button {
+                    actions.primary(hunk)
+                } label: {
+                    Label(actions.primaryTitle, systemImage: actions.primaryIcon)
+                }
+            }
+        }
+        .font(.system(size: 11))
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.08))
     }
 }
 

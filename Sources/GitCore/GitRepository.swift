@@ -38,6 +38,13 @@ public struct GitRepository: Sendable, Hashable {
         return GitParsers.parseLog(out.text)
     }
 
+    /// A single commit by sha or ref name (`stash@{0}`, `HEAD`). `nil` if not found.
+    public func commit(_ rev: String) async throws -> Commit? {
+        let out = try await run(["log", "-1", "--format=\(GitParsers.logFormat)", rev, "--"], check: false)
+        guard out.exitCode == 0 else { return nil }
+        return GitParsers.parseLog(out.text).first
+    }
+
     /// All branches, tags, and stashes.
     public func refs() async throws -> [Ref] {
         let out = try await run(["for-each-ref", "--format=\(GitParsers.refFormat)",
@@ -93,9 +100,176 @@ public struct GitRepository: Sendable, Hashable {
 
     // MARK: Operations
 
+    /// Runs with data on stdin.
+    @discardableResult
+    public func run(_ arguments: [String], stdin: String, check: Bool = true) async throws -> GitOutput {
+        try await GitRunner.run(arguments, in: workingDirectory, stdin: Data(stdin.utf8), check: check)
+    }
+
+    // MARK: Index
+
+    /// Adds files to the index. Untracked and deleted ones too: `add -A` on the paths.
+    public func stage(_ paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        try await run(["add", "-A", "--"] + paths)
+    }
+
+    public func stageAll() async throws {
+        try await run(["add", "-A"])
+    }
+
+    /// Removes files from the index without touching the working tree.
+    public func unstage(_ paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        if case .unborn = try await head() {
+            // Without HEAD there is nothing to restore from; the files can only be untracked.
+            try await run(["rm", "--cached", "-r", "-q", "--"] + paths)
+        } else {
+            try await run(["restore", "--staged", "--"] + paths)
+        }
+    }
+
+    public func unstageAll() async throws {
+        if case .unborn = try await head() {
+            try await run(["rm", "--cached", "-r", "-q", "--", "."], check: false)
+        } else {
+            try await run(["reset", "-q"])
+        }
+    }
+
+    /// Applies a patch to the index (`stage: true`) or to the working tree.
+    /// `reverse` undoes it: unstaging a hunk or discarding a hunk.
+    public func apply(patch: String, toIndex: Bool, reverse: Bool) async throws {
+        var args = ["apply", "--recount", "--whitespace=nowarn"]
+        if toIndex { args.append("--cached") }
+        if reverse { args.append("-R") }
+        try await run(args, stdin: patch)
+    }
+
+    /// Reverts file changes in the working tree to the index state.
+    /// Untracked files are deleted.
+    public func discard(_ entries: [StatusEntry]) async throws {
+        let untracked = entries.filter { $0.index == .untracked }.map(\.path)
+        let tracked = entries.filter { $0.index != .untracked && $0.isUnstaged }.map(\.path)
+        if !tracked.isEmpty {
+            try await run(["restore", "--worktree", "--"] + tracked)
+        }
+        if !untracked.isEmpty {
+            try await run(["clean", "-f", "-d", "-q", "--"] + untracked)
+        }
+    }
+
+    public func commit(message: String, amend: Bool = false) async throws {
+        var args = ["commit", "--file=-", "--cleanup=strip"]
+        if amend { args.append("--amend") }
+        try await run(args, stdin: message)
+    }
+
+    // MARK: Branches and tags
+
+    public func checkout(branch: String) async throws {
+        try await run(["switch", branch])
+    }
+
+    /// Creates a local branch from a remote one and switches to it.
+    public func checkoutRemote(_ remoteBranch: String) async throws {
+        // `switch` creates the branch with its upstream by itself if the name is unambiguous.
+        let name = remoteBranch.split(separator: "/", maxSplits: 1).last.map(String.init) ?? remoteBranch
+        try await run(["switch", "--track", "-c", name, remoteBranch])
+    }
+
+    public func checkout(commit sha: String) async throws {
+        try await run(["switch", "--detach", sha])
+    }
+
+    public func createBranch(_ name: String, at startPoint: String? = nil, checkout: Bool) async throws {
+        if checkout {
+            try await run(["switch", "-c", name] + (startPoint.map { [$0] } ?? []))
+        } else {
+            try await run(["branch", name] + (startPoint.map { [$0] } ?? []))
+        }
+    }
+
+    public func renameBranch(_ old: String, to new: String) async throws {
+        try await run(["branch", "-m", old, new])
+    }
+
+    public func deleteBranch(_ name: String, force: Bool) async throws {
+        try await run(["branch", force ? "-D" : "-d", name])
+    }
+
+    /// Deletes a branch on the remote: `origin/feature` → `push origin --delete feature`.
+    public func deleteRemoteBranch(_ remoteBranch: String) async throws {
+        let parts = remoteBranch.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2 else {
+            throw GitError(arguments: ["push", "--delete", remoteBranch], exitCode: 1, stderr: "does not look like remote/branch")
+        }
+        try await run(["push", String(parts[0]), "--delete", String(parts[1])])
+    }
+
+    /// A lightweight tag without a message, or an annotated tag with one.
+    public func createTag(_ name: String, at sha: String? = nil, message: String? = nil) async throws {
+        var args = ["tag"]
+        if let message, !message.isEmpty { args += ["-a", "--file=-"] }
+        args.append(name)
+        if let sha { args.append(sha) }
+        if let message, !message.isEmpty {
+            try await run(args, stdin: message)
+        } else {
+            try await run(args)
+        }
+    }
+
+    public func deleteTag(_ name: String) async throws {
+        try await run(["tag", "-d", name])
+    }
+
+    // MARK: Remotes
+
+    public func remotes() async throws -> [String] {
+        try await run(["remote"]).text.split(separator: "\n").map(String.init)
+    }
+
     public func fetch(prune: Bool = true) async throws {
         var args = ["fetch", "--all"]
         if prune { args.append("--prune") }
         try await run(args)
+    }
+
+    public func pull(rebase: Bool) async throws {
+        try await run(["pull", rebase ? "--rebase" : "--no-rebase"])
+    }
+
+    /// Pushes the current branch. If no upstream is set, sets it to `remote/<branch>`.
+    public func push(remote: String? = nil, branch: String? = nil, setUpstream: Bool = false, force: Bool = false) async throws {
+        var args = ["push"]
+        if force { args.append("--force-with-lease") }
+        if setUpstream { args.append("--set-upstream") }
+        if let remote { args.append(remote) }
+        if let branch { args.append(branch) }
+        try await run(args)
+    }
+
+    // MARK: Stash
+
+    public func stashList() async throws -> [StashEntry] {
+        let out = try await run(["stash", "list", "--format=\(GitParsers.stashFormat)"])
+        return GitParsers.parseStashList(out.text)
+    }
+
+    public func stashPush(message: String? = nil, includeUntracked: Bool = true, keepIndex: Bool = false) async throws {
+        var args = ["stash", "push", "-q"]
+        if includeUntracked { args.append("--include-untracked") }
+        if keepIndex { args.append("--keep-index") }
+        if let message, !message.isEmpty { args += ["-m", message] }
+        try await run(args)
+    }
+
+    public func stashApply(_ entry: StashEntry, pop: Bool) async throws {
+        try await run(["stash", pop ? "pop" : "apply", "-q", "--index", entry.ref])
+    }
+
+    public func stashDrop(_ entry: StashEntry) async throws {
+        try await run(["stash", "drop", "-q", entry.ref])
     }
 }

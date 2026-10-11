@@ -6,6 +6,12 @@ public struct GitError: Error, Sendable, CustomStringConvertible {
     public let exitCode: Int32
     public let stderr: String
 
+    public init(arguments: [String], exitCode: Int32, stderr: String) {
+        self.arguments = arguments
+        self.exitCode = exitCode
+        self.stderr = stderr
+    }
+
     public var description: String {
         let cmd = (["git"] + arguments).joined(separator: " ")
         let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -22,6 +28,47 @@ public struct GitOutput: Sendable {
     public var text: String { String(decoding: stdout, as: UTF8.self) }
 }
 
+/// Record of a single git run, for the in-app operation log.
+public struct GitInvocation: Sendable, Identifiable {
+    public let id: UUID
+    public let date: Date
+    public let arguments: [String]
+    public let directory: URL?
+    public let exitCode: Int32
+    public let stderr: String
+    public let duration: TimeInterval
+
+    /// Command line without internal flags (`--no-pager`, `color.ui`).
+    public var commandLine: String {
+        (["git"] + arguments.map { $0.contains(" ") ? "'\($0)'" : $0 }).joined(separator: " ")
+    }
+
+    /// Commands that change something in the repository. The others (log, status,
+    /// diff) run constantly on every refresh and do not belong in the log.
+    public var isMutating: Bool {
+        guard let first = arguments.first, Self.mutatingCommands.contains(first) else { return false }
+        let rest = arguments.dropFirst()
+        switch first {
+        case "stash":
+            // `stash list` and `stash show` only read.
+            return !(rest.first == "list" || rest.first == "show")
+        case "remote":
+            // `remote` and `remote -v` list; `remote add/remove/...` modify.
+            return rest.contains { !$0.hasPrefix("-") }
+        case "branch", "tag":
+            // Without positional arguments this is a listing (`branch -a`, `tag -l`).
+            return rest.contains { !$0.hasPrefix("-") }
+        default:
+            return true
+        }
+    }
+
+    static let mutatingCommands: Set<String> = [
+        "add", "rm", "restore", "reset", "apply", "commit", "checkout", "switch", "branch", "tag",
+        "fetch", "pull", "push", "merge", "rebase", "cherry-pick", "revert", "stash", "clean", "remote",
+    ]
+}
+
 /// Runs the system `git` and collects its output.
 ///
 /// We use the regular binary rather than libgit2: behavior matches the
@@ -31,16 +78,26 @@ public enum GitRunner {
     /// Path to git. By default it is looked up via PATH, but Xcode's copy is used too.
     public nonisolated(unsafe) static var executable: String = "/usr/bin/git"
 
+    /// Called after every run. The app subscribes to keep the log.
+    public nonisolated(unsafe) static var observer: (@Sendable (GitInvocation) -> Void)?
+
     /// Runs git with the given arguments in the specified directory.
+    /// - Parameter stdin: data for standard input (a patch for `apply`, a message for `commit -F -`).
     /// - Parameter check: throw ``GitError`` on a nonzero exit code.
     @discardableResult
     public static func run(
         _ arguments: [String],
         in directory: URL?,
+        stdin: Data? = nil,
         environment extra: [String: String] = [:],
         check: Bool = true
     ) async throws -> GitOutput {
-        let output = try await execute(arguments, in: directory, extra: extra)
+        let started = Date()
+        let output = try await execute(arguments, in: directory, stdin: stdin, extra: extra)
+        observer?(GitInvocation(
+            id: UUID(), date: started, arguments: arguments, directory: directory,
+            exitCode: output.exitCode, stderr: output.stderr, duration: Date().timeIntervalSince(started)
+        ))
         if check, output.exitCode != 0 {
             throw GitError(arguments: arguments, exitCode: output.exitCode, stderr: output.stderr)
         }
@@ -50,6 +107,7 @@ public enum GitRunner {
     private static func execute(
         _ arguments: [String],
         in directory: URL?,
+        stdin: Data?,
         extra: [String: String]
     ) async throws -> GitOutput {
         let process = Process()
@@ -61,6 +119,8 @@ public enum GitRunner {
         var env = ProcessInfo.processInfo.environment
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["LC_ALL"] = "C.UTF-8"
+        // The editor must not open: all messages are passed explicitly.
+        env["GIT_EDITOR"] = "true"
         for (k, v) in extra { env[k] = v }
         process.environment = env
 
@@ -68,9 +128,26 @@ public enum GitRunner {
         let err = Pipe()
         process.standardOutput = out
         process.standardError = err
-        process.standardInput = FileHandle.nullDevice
+        let input: Pipe?
+        if stdin != nil {
+            input = Pipe()
+            process.standardInput = input
+        } else {
+            input = nil
+            process.standardInput = FileHandle.nullDevice
+        }
 
         try process.run()
+
+        if let input, let stdin {
+            // Write in a separate task: a large patch may not fit in the buffer
+            // until git starts reading.
+            let handle = input.fileHandleForWriting
+            Task.detached(priority: .userInitiated) {
+                try? handle.write(contentsOf: stdin)
+                try? handle.close()
+            }
+        }
 
         // Read both channels in parallel, otherwise with large output the process
         // would block on a full buffer and hang.

@@ -74,7 +74,12 @@ public enum DiffParser {
         var files: [FileDiff] = []
         var builder: FileBuilder?
 
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        // The text ends with a newline: the empty tail after it is not a diff line,
+        // otherwise the last hunk gets an extra context line and can no longer be applied.
+        if rawLines.last?.isEmpty == true { rawLines.removeLast() }
+
+        for raw in rawLines {
             let line = Substring(raw)
             if line.hasPrefix("diff --git ") {
                 if let b = builder { files.append(b.build()) }
@@ -222,5 +227,44 @@ public enum DiffParser {
             return FileDiff(oldPath: copy.oldPath, newPath: copy.newPath, status: status,
                             isBinary: copy.isBinary, hunks: copy.hunks)
         }
+    }
+}
+
+// MARK: Building patches
+
+extension FileDiff {
+    /// A single-hunk patch suitable for `git apply`. Needed for stage/unstage/discard
+    /// of part of a file's changes: we take the file header and exactly one hunk.
+    public func patch(hunk: DiffHunk) -> String {
+        patch(hunks: [hunk])
+    }
+
+    /// A patch made of the selected hunks of a file.
+    public func patch(hunks selected: [DiffHunk]) -> String {
+        let old = oldPath.map { "a/\($0)" } ?? "/dev/null"
+        let new = newPath.map { "b/\($0)" } ?? "/dev/null"
+        var out = "diff --git a/\(oldPath ?? newPath ?? "") b/\(newPath ?? oldPath ?? "")\n"
+        switch status {
+        case .added: out += "new file mode 100644\n"
+        case .deleted: out += "deleted file mode 100644\n"
+        case .renamed:
+            if let oldPath, let newPath { out += "rename from \(oldPath)\nrename to \(newPath)\n" }
+        case .copied:
+            if let oldPath, let newPath { out += "copy from \(oldPath)\ncopy to \(newPath)\n" }
+        case .modified: break
+        }
+        out += "--- \(old)\n+++ \(new)\n"
+        for hunk in selected {
+            out += hunk.header + "\n"
+            for line in hunk.lines {
+                switch line.kind {
+                case .context: out += " " + line.text + "\n"
+                case .addition: out += "+" + line.text + "\n"
+                case .deletion: out += "-" + line.text + "\n"
+                case .meta: out += line.text + "\n"
+                }
+            }
+        }
+        return out
     }
 }

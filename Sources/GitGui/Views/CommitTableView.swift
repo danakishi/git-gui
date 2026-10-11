@@ -17,11 +17,17 @@ struct CommitTableView: NSViewRepresentable {
     let visibleLanes: Int
     @Binding var selection: Commit.ID?
     let onReachEnd: () -> Void
+    /// Row context menu; `nil` means no menu.
+    var contextMenu: ((Commit) -> NSMenu?)?
 
     nonisolated static let rowHeight: CGFloat = 24
 
     func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
+        let table = ContextMenuTableView()
+        table.menuProvider = { [weak coordinator = context.coordinator] row in
+            guard let c = coordinator, row >= 0, row < c.parent.commits.count else { return nil }
+            return c.parent.contextMenu?(c.parent.commits[row])
+        }
         table.style = .plain
         table.rowHeight = Self.rowHeight
         table.intercellSpacing = NSSize(width: 0, height: 0)
@@ -213,6 +219,42 @@ struct CommitTableView: NSViewRepresentable {
             }
         }
     }
+}
+
+// MARK: Context menu
+
+/// NSTableView that builds the menu for the row under the cursor and selects it.
+final class ContextMenuTableView: NSTableView {
+    var menuProvider: ((Int) -> NSMenu?)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        guard row >= 0 else { return nil }
+        if !selectedRowIndexes.contains(row) {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        return menuProvider?(row)
+    }
+}
+
+/// Menu item with a closure instead of target/action.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, destructive: Bool = false, enabled: Bool = true, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+        isEnabled = enabled
+        if destructive {
+            attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: NSColor.systemRed])
+        }
+    }
+
+    required init(coder: NSCoder) { fatalError() }
+
+    @objc private func fire() { handler() }
 }
 
 // MARK: Cells

@@ -120,3 +120,24 @@ public struct WorkingTreeStatus: Sendable {
         self.entries = entries
     }
 }
+
+/// An entry of `git stash list`.
+public struct StashEntry: Identifiable, Hashable, Sendable {
+    /// The sequence number: `stash@{index}`.
+    public let index: Int
+    /// The sha of the stash commit.
+    public let sha: String
+    public let date: Date
+    /// The message, for example `WIP on main: 1234abc Subject` or one set by the user.
+    public let message: String
+
+    public var id: String { sha }
+    public var ref: String { "stash@{\(index)}" }
+
+    public init(index: Int, sha: String, date: Date, message: String) {
+        self.index = index
+        self.sha = sha
+        self.date = date
+        self.message = message
+    }
+}

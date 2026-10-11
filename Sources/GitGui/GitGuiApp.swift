@@ -6,6 +6,7 @@ struct GitGuiApp: App {
 
     init() {
         DebugScreenshot.armIfRequested()
+        OperationLog.shared.install()
     }
 
     var body: some Scene {

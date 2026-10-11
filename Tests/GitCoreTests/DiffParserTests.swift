@@ -78,3 +78,43 @@ struct DiffParserTests {
         #expect(DiffParser.additionsOnly(path: "e", text: "").hunks.isEmpty)
     }
 }
+
+@Suite("Building a patch from a hunk")
+struct HunkPatchTests {
+    @Test func lastHunkHasNoTrailingBlankLine() {
+        let text = """
+        diff --git a/a.txt b/a.txt
+        index 1..2 100644
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -7,4 +7,4 @@ line 6
+         line 7
+         line 8
+         line 9
+        -line 10
+        +LINE 10
+
+        """
+        let file = DiffParser.parse(text)[0]
+        #expect(file.hunks[0].lines.count == 5)
+        let patch = file.patch(hunk: file.hunks[0])
+        #expect(patch == """
+        diff --git a/a.txt b/a.txt
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -7,4 +7,4 @@ line 6
+         line 7
+         line 8
+         line 9
+        -line 10
+        +LINE 10
+
+        """)
+    }
+
+    @Test func newFilePatchUsesDevNull() {
+        let file = DiffParser.additionsOnly(path: "n.txt", text: "a\nb\n")
+        let patch = file.patch(hunk: file.hunks[0])
+        #expect(patch.hasPrefix("diff --git a/n.txt b/n.txt\nnew file mode 100644\n--- /dev/null\n+++ b/n.txt\n@@ -0,0 +1,2 @@\n+a\n+b\n"))
+    }
+}

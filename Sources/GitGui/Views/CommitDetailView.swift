@@ -8,10 +8,33 @@ struct CommitDetailView: View {
 
     var body: some View {
         if let detail = model.detail {
+            // A single flat VSplitView: in a nested one the diff's priority doesn't work,
+            // and the extra space goes to the file list.
             VSplitView {
                 header(detail)
-                    .frame(minHeight: 110, idealHeight: 160)
-                fileAndDiff(detail)
+                    .frame(minHeight: 150, idealHeight: 160, maxHeight: 400)
+                // A bare List in a VSplitView pane doesn't give space to its neighbors;
+                // wrapping it in a VStack fixes that.
+                VStack(spacing: 0) {
+                    List(detail.files, selection: $selectedFile) { file in
+                        FileRow(file: file).tag(file.id)
+                    }
+                    .overlay {
+                        if detail.files.isEmpty {
+                            ContentUnavailableView("No Changed Files", systemImage: "doc")
+                        }
+                    }
+                }
+                .frame(minHeight: 130, idealHeight: 160, maxHeight: 480)
+                Group {
+                    if let file = detail.files.first(where: { $0.id == selectedFile }) {
+                        DiffView(file: file)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(minHeight: 80, maxHeight: .infinity)
+                .layoutPriority(1)
             }
             .onChange(of: detail.commit.id, initial: true) {
                 selectedFile = detail.files.first?.id
@@ -75,26 +98,6 @@ struct CommitDetailView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private func fileAndDiff(_ detail: CommitDetail) -> some View {
-        VSplitView {
-            List(detail.files, selection: $selectedFile) { file in
-                FileRow(file: file).tag(file.id)
-            }
-            .frame(minHeight: 80, idealHeight: 160)
-            .overlay {
-                if detail.files.isEmpty {
-                    ContentUnavailableView("No Changed Files", systemImage: "doc")
-                }
-            }
-
-            if let file = detail.files.first(where: { $0.id == selectedFile }) {
-                DiffView(file: file)
-            } else {
-                Color.clear
-            }
-        }
     }
 }
 

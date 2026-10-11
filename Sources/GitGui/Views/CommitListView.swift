@@ -1,3 +1,4 @@
+import AppKit
 import GitCore
 import GraphLayout
 import SwiftUI
@@ -14,7 +15,8 @@ struct CommitListView: View {
             headSHA: model.head?.sha,
             visibleLanes: visibleLanes,
             selection: $model.selectedCommitID,
-            onReachEnd: { Task { await model.loadMore() } }
+            onReachEnd: { Task { await model.loadMore() } },
+            contextMenu: { commit in contextMenu(for: commit) }
         )
         .overlay {
             if model.commits.isEmpty, model.isLoading {
@@ -25,6 +27,59 @@ struct CommitListView: View {
                 ContentUnavailableView.search(text: model.searchText)
             }
         }
+    }
+
+    /// Row menu: check out, branches and tags on this commit, copy.
+    private func contextMenu(for commit: Commit) -> NSMenu {
+        let menu = NSMenu()
+        let refs = model.refsByCommit[commit.id] ?? []
+        let busy = model.busy != nil
+        let isHead = commit.id == model.head?.sha
+
+        for ref in refs where ref.kind == .localBranch && !ref.isHead {
+            menu.addItem(ClosureMenuItem("Check Out \(ref.shortName)", enabled: !busy) {
+                Task { await model.checkout(ref) }
+            })
+        }
+        for ref in refs where ref.kind == .remoteBranch {
+            menu.addItem(ClosureMenuItem("Check Out \(ref.shortName)", enabled: !busy) {
+                Task { await model.checkout(ref) }
+            })
+        }
+        if !isHead || model.currentBranch != nil {
+            menu.addItem(ClosureMenuItem("Check Out Commit (detached)", enabled: !busy) {
+                Task { await model.checkout(commit: commit.id) }
+            })
+        }
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("New Branch Here…", enabled: !busy) {
+            model.sheet = .newBranch(from: commit.id)
+        })
+        menu.addItem(ClosureMenuItem("New Tag Here…", enabled: !busy) {
+            model.sheet = .newTag(at: commit.id)
+        })
+
+        let deletable = refs.filter { ($0.kind == .localBranch && !$0.isHead) || $0.kind == .tag }
+        if !deletable.isEmpty {
+            menu.addItem(.separator())
+            for ref in deletable {
+                let title = ref.kind == .tag ? "Delete Tag \(ref.shortName)" : "Delete Branch \(ref.shortName)"
+                menu.addItem(ClosureMenuItem(title, destructive: true, enabled: !busy) {
+                    Task {
+                        if ref.kind == .tag {
+                            await model.deleteTag(ref)
+                        } else if await !model.deleteBranch(ref, force: false) {
+                            model.confirmForceDelete = ref
+                        }
+                    }
+                })
+            }
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("Copy SHA") { model.copyToPasteboard(commit.id) })
+        menu.addItem(ClosureMenuItem("Copy Message") { model.copyToPasteboard(commit.subject) })
+        return menu
     }
 
     /// The graph is hidden while searching: the rows are no longer consecutive.

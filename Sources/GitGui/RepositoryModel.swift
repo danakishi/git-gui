@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import GitCore
 import GraphLayout
@@ -27,8 +28,12 @@ final class RepositoryModel {
     private(set) var refs: [Ref] = []
     private(set) var head: Head?
     private(set) var status: WorkingTreeStatus?
+    private(set) var stashes: [StashEntry] = []
     private(set) var isLoading = false
     private(set) var error: String?
+
+    /// Name of the running operation (push, commit…) until it finishes.
+    private(set) var busy: String?
 
     /// Refs by commit sha: for the labels on rows.
     private(set) var refsByCommit: [String: [Ref]] = [:]
@@ -61,6 +66,19 @@ final class RepositoryModel {
     private(set) var detail: CommitDetail?
     private(set) var isLoadingDetail = false
 
+    /// Commit message draft and amend mode: they live as long as the window is open.
+    var commitMessage = ""
+    var amend = false {
+        didSet {
+            guard amend, !oldValue, commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            Task { await prefillAmendMessage() }
+        }
+    }
+
+    /// The open input sheet (new branch, tag, stash) and the branch awaiting delete confirmation.
+    var sheet: RepositorySheet?
+    var confirmForceDelete: Ref?
+
     @ObservationIgnored private var watcher: RepositoryWatcher?
     @ObservationIgnored private var reloadPending = false
 
@@ -91,6 +109,18 @@ final class RepositoryModel {
             .map { WorkingFile(entry: $0, staged: false) }
     }
 
+    var localBranches: [Ref] { refs.filter { $0.kind == .localBranch } }
+    var remoteBranches: [Ref] { refs.filter { $0.kind == .remoteBranch } }
+    var tags: [Ref] { refs.filter { $0.kind == .tag } }
+
+    var currentBranch: String? {
+        if case .branch(let name, _) = head { return name }
+        return nil
+    }
+
+    /// The current branch has an upstream: pull and a plain push are available.
+    var hasUpstream: Bool { status?.upstream != nil }
+
     // MARK: Loading
 
     func start() async {
@@ -108,6 +138,9 @@ final class RepositoryModel {
         if DebugScreenshot.showWorkingTree {
             inspector = .workingTree
         }
+        for args in DebugScreenshot.debugGitCommands {
+            await perform("git \(args.joined(separator: " "))") { try await repo.run(args) }
+        }
     }
 
     private func reloadFromWatcher() async {
@@ -118,7 +151,8 @@ final class RepositoryModel {
 
     func reload() async {
         isLoading = true
-        error = nil
+        // Don't clear the error: it may be an operation error, and the
+        // user should dismiss it, not the next FSEvents event.
         defer {
             isLoading = false
             if reloadPending {
@@ -131,15 +165,17 @@ final class RepositoryModel {
             async let r = repo.refs()
             async let h = repo.head()
             async let s = repo.status()
-            let (commits, refs, head, status) = try await (c, r, h, s)
+            async let st = repo.stashList()
+            let (commits, refs, head, status, stashes) = try await (c, r, h, s, st)
             self.commits = commits
             self.refs = refs
             self.head = head
             self.status = status
+            self.stashes = stashes
             self.hasMore = commits.count == Self.pageSize
             self.refsByCommit = Dictionary(grouping: refs, by: \.target)
             relayout()
-            if let id = selectedCommitID, !commits.contains(where: { $0.id == id }) {
+            if let id = selectedCommitID, !commits.contains(where: { $0.id == id }), !stashes.contains(where: { $0.sha == id }) {
                 selectedCommitID = nil
             } else if selectedCommitID != nil {
                 await loadDetail()
@@ -174,13 +210,20 @@ final class RepositoryModel {
     }
 
     private func loadDetail() async {
-        guard let id = selectedCommitID, let commit = commits.first(where: { $0.id == id }) else {
+        guard let id = selectedCommitID else {
             detail = nil
             return
         }
         isLoadingDetail = true
         defer { isLoadingDetail = false }
         do {
+            // Stash commits aren't in the list; they are read separately.
+            var found = commits.first(where: { $0.id == id })
+            if found == nil { found = try await repo.commit(id) }
+            guard let commit = found else {
+                detail = nil
+                return
+            }
             async let message = repo.message(of: id)
             async let patch = repo.diff(of: id)
             let (m, p) = try await (message, patch)
@@ -214,12 +257,219 @@ final class RepositoryModel {
         error = nil
     }
 
-    func fetch() async {
+    // MARK: Operations
+
+    /// Runs an operation: shows busy state, catches the error, reloads the repository.
+    /// Returns `true` if the operation succeeded.
+    @discardableResult
+    func perform(_ title: String, _ operation: () async throws -> Void) async -> Bool {
+        guard busy == nil else { return false }
+        busy = title
+        error = nil
+        defer { busy = nil }
+        var failure: String?
         do {
-            try await repo.fetch()
-            await reload()
+            try await operation()
         } catch {
-            self.error = String(describing: error)
+            failure = String(describing: error)
         }
+        error = failure
+        await reload()
+        return failure == nil
+    }
+
+    // Index
+
+    func stage(_ files: [WorkingFile]) async {
+        await perform("Staging") { try await repo.stage(files.map(\.entry.path)) }
+    }
+
+    func unstage(_ files: [WorkingFile]) async {
+        await perform("Unstaging") { try await repo.unstage(files.map(\.entry.path)) }
+    }
+
+    func stageAll() async {
+        await perform("Staging all") { try await repo.stageAll() }
+    }
+
+    func unstageAll() async {
+        await perform("Unstaging all") { try await repo.unstageAll() }
+    }
+
+    func stageHunk(_ hunk: DiffHunk, of file: FileDiff) async {
+        await perform("Staging hunk") {
+            try await repo.apply(patch: file.patch(hunk: hunk), toIndex: true, reverse: false)
+        }
+    }
+
+    func unstageHunk(_ hunk: DiffHunk, of file: FileDiff) async {
+        await perform("Unstaging hunk") {
+            try await repo.apply(patch: file.patch(hunk: hunk), toIndex: true, reverse: true)
+        }
+    }
+
+    func discardHunk(_ hunk: DiffHunk, of file: FileDiff) async {
+        await perform("Discarding hunk") {
+            try await repo.apply(patch: file.patch(hunk: hunk), toIndex: false, reverse: true)
+        }
+    }
+
+    /// Discards changes in the working tree. The UI asks for confirmation.
+    func discard(_ files: [WorkingFile]) async {
+        await perform("Discarding changes") { try await repo.discard(files.map(\.entry)) }
+    }
+
+    func discardAll() async {
+        await perform("Discarding all changes") {
+            try await repo.discard(status?.entries ?? [])
+        }
+    }
+
+    var canCommit: Bool {
+        !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (amend || !stagedFiles.isEmpty)
+    }
+
+    func commit() async {
+        let message = commitMessage
+        let amend = amend
+        let ok = await perform(amend ? "Amending commit" : "Creating commit") {
+            try await repo.commit(message: message, amend: amend)
+        }
+        if ok {
+            commitMessage = ""
+            self.amend = false
+        }
+    }
+
+    private func prefillAmendMessage() async {
+        guard let text = try? await repo.message(of: "HEAD") else { return }
+        if amend, commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            commitMessage = text.trimmingCharacters(in: .newlines)
+        }
+    }
+
+    // Branches and tags
+
+    func checkout(_ ref: Ref) async {
+        switch ref.kind {
+        case .localBranch:
+            await perform("Checking out \(ref.shortName)") { try await repo.checkout(branch: ref.shortName) }
+        case .remoteBranch:
+            await perform("Checking out \(ref.shortName)") {
+                // If a local branch with this name already exists, just switch to it.
+                let local = ref.shortName.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ref.shortName
+                if localBranches.contains(where: { $0.shortName == local }) {
+                    try await repo.checkout(branch: local)
+                } else {
+                    try await repo.checkoutRemote(ref.shortName)
+                }
+            }
+        case .tag, .stash, .other:
+            await checkout(commit: ref.target)
+        }
+    }
+
+    func checkout(commit sha: String) async {
+        await perform("Checking out \(sha.prefix(8))") { try await repo.checkout(commit: sha) }
+    }
+
+    func createBranch(_ name: String, at sha: String?, checkout: Bool) async {
+        await perform("Creating branch \(name)") { try await repo.createBranch(name, at: sha, checkout: checkout) }
+    }
+
+    func renameBranch(_ old: String, to new: String) async {
+        await perform("Renaming \(old)") { try await repo.renameBranch(old, to: new) }
+    }
+
+    /// Deletes a branch. Returns `false` without an error message if the branch isn't merged:
+    /// the UI asks for confirmation and calls again with `force: true`.
+    @discardableResult
+    func deleteBranch(_ ref: Ref, force: Bool) async -> Bool {
+        if ref.kind == .remoteBranch {
+            return await perform("Deleting \(ref.shortName)") { try await repo.deleteRemoteBranch(ref.shortName) }
+        }
+        if !force {
+            do {
+                try await repo.deleteBranch(ref.shortName, force: false)
+                await reload()
+                return true
+            } catch let e as GitError where e.stderr.contains("not fully merged") {
+                return false
+            } catch {
+                self.error = String(describing: error)
+                return true
+            }
+        }
+        return await perform("Deleting \(ref.shortName)") { try await repo.deleteBranch(ref.shortName, force: true) }
+    }
+
+    func createTag(_ name: String, at sha: String?, message: String) async {
+        await perform("Creating tag \(name)") { try await repo.createTag(name, at: sha, message: message) }
+    }
+
+    func deleteTag(_ ref: Ref) async {
+        await perform("Deleting tag \(ref.shortName)") { try await repo.deleteTag(ref.shortName) }
+    }
+
+    // Remotes
+
+    func fetch() async {
+        await perform("Fetch") { try await repo.fetch() }
+    }
+
+    func pull(rebase: Bool) async {
+        await perform(rebase ? "Pull --rebase" : "Pull") { try await repo.pull(rebase: rebase) }
+    }
+
+    /// Pushes the current branch; without an upstream, sets it to the first remote.
+    func push() async {
+        await perform("Push") {
+            if hasUpstream {
+                try await repo.push()
+            } else {
+                guard let branch = currentBranch else {
+                    throw GitError(arguments: ["push"], exitCode: 1, stderr: "HEAD is not on a branch")
+                }
+                let remotes = try await repo.remotes()
+                guard let remote = remotes.first(where: { $0 == "origin" }) ?? remotes.first else {
+                    throw GitError(arguments: ["push"], exitCode: 1, stderr: "no remotes")
+                }
+                try await repo.push(remote: remote, branch: branch, setUpstream: true)
+            }
+        }
+    }
+
+    // Stash
+
+    func stashPush(message: String, includeUntracked: Bool) async {
+        await perform("Stashing changes") {
+            try await repo.stashPush(message: message, includeUntracked: includeUntracked)
+        }
+    }
+
+    func stashApply(_ entry: StashEntry, pop: Bool) async {
+        await perform(pop ? "Popping stash" : "Applying stash") { try await repo.stashApply(entry, pop: pop) }
+    }
+
+    func stashDrop(_ entry: StashEntry) async {
+        if selectedCommitID == entry.sha { selectedCommitID = nil }
+        await perform("Dropping stash") { try await repo.stashDrop(entry) }
+    }
+
+    /// Shows a stash in the inspector as a commit.
+    func show(_ entry: StashEntry) {
+        selectedCommitID = entry.sha
+    }
+
+    // Misc
+
+    func revealInFinder(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([repo.workingDirectory.appending(path: path)])
+    }
+
+    func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
