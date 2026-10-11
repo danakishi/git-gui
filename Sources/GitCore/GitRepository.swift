@@ -81,6 +81,16 @@ public struct GitRepository: Sendable, Hashable {
         return try await run(args).text
     }
 
+    /// Contents of a file from the working tree (for untracked files).
+    public func fileContents(_ path: String) async throws -> String {
+        let url = workingDirectory.appending(path: path)
+        let data = try Data(contentsOf: url)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw GitError(arguments: ["cat", path], exitCode: 1, stderr: "file is not UTF-8 or is binary")
+        }
+        return text
+    }
+
     // MARK: Operations
 
     public func fetch(prune: Bool = true) async throws {
