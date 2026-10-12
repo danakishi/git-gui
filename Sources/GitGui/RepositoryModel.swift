@@ -80,6 +80,14 @@ final class RepositoryModel {
         }
     }
 
+    // Window panels: here rather than in @State, so that menus and the ⌘K palette can reach them.
+    var showInspector = true
+    var showLog = DebugScreenshot.showLog
+    var showBranches = false
+    var showStash = false
+    /// Increments when focus needs to move to the search field (⌘F).
+    var searchFocusRequest = 0
+
     /// The open input sheet (new branch, tag, stash) and the branch awaiting delete confirmation.
     var sheet: RepositorySheet?
     var confirmForceDelete: Ref?
@@ -609,6 +617,18 @@ final class RepositoryModel {
         await perform("Undoing “\(action.message)”") { try await repo.undo(action) }
     }
 
+    /// Shows the working tree panel instead of a commit.
+    func showWorkingTree() {
+        inspector = .workingTree
+        selectedCommitID = nil
+        showInspector = true
+    }
+
+    /// Selects the HEAD commit in the graph.
+    func selectHead() {
+        if let sha = head?.sha { selectedCommitID = sha }
+    }
+
     var canUndo: Bool {
         busy == nil && (operation != nil || undoAction != nil)
     }
@@ -660,6 +680,11 @@ final class RepositoryModel {
     }
 
     // Misc
+
+    func openInTerminal() {
+        guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else { return }
+        NSWorkspace.shared.open([repo.workingDirectory], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
+    }
 
     func revealInFinder(_ path: String) {
         NSWorkspace.shared.activateFileViewerSelecting([repo.workingDirectory.appending(path: path)])

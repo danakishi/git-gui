@@ -3,8 +3,6 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(RepositoryStore.self) private var store
-    /// Models of open repositories: kept so they aren't reloaded on every switch.
-    @State private var models: [RepositoryEntry.ID: RepositoryModel] = [:]
 
     var body: some View {
         @Bindable var store = store
@@ -12,7 +10,7 @@ struct ContentView: View {
             SidebarView()
         } detail: {
             if let entry = store.selected {
-                RepositoryView(model: model(for: entry))
+                RepositoryView(model: store.model(for: entry))
                     .id(entry.id)
             } else {
                 ContentUnavailableView(
@@ -20,6 +18,17 @@ struct ContentView: View {
                     systemImage: "folder.badge.plus",
                     description: Text("Press ⌘O or drag a folder into the sidebar.")
                 )
+            }
+        }
+        .overlay(alignment: .top) {
+            if store.showPalette {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                        .onTapGesture { store.showPalette = false }
+                    CommandPalette(model: store.selectedModel)
+                        .padding(.top, 60)
+                }
             }
         }
         .alert("Error", isPresented: Binding(
@@ -31,22 +40,12 @@ struct ContentView: View {
             Text(store.lastError ?? "")
         }
     }
-
-    private func model(for entry: RepositoryEntry) -> RepositoryModel {
-        if let m = models[entry.id] { return m }
-        let m = RepositoryModel(GitRepository(entry.url))
-        models[entry.id] = m
-        return m
-    }
 }
 
 /// Detail area: the commit list, the operation log at the bottom, and the inspector on the right.
 struct RepositoryView: View {
     @Bindable var model: RepositoryModel
-    @State private var showInspector = true
-    @State private var showLog = DebugScreenshot.showLog
-    @State private var showBranches = false
-    @State private var showStash = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,15 +56,15 @@ struct RepositoryView: View {
             WorkingTreeBar(model: model)
             Divider()
             CommitListView(model: model)
-            if showLog {
+            if model.showLog {
                 Divider()
                 OperationLogView(model: model)
                     .frame(height: 160)
             }
             Divider()
-            StatusBar(model: model, showLog: $showLog)
+            StatusBar(model: model)
         }
-        .inspector(isPresented: $showInspector) {
+        .inspector(isPresented: $model.showInspector) {
             Group {
                 switch model.inspector {
                 case .commit: CommitDetailView(model: model)
@@ -75,6 +74,9 @@ struct RepositoryView: View {
             .inspectorColumnWidth(min: 300, ideal: 420, max: 900)
         }
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Message, author, or sha")
+        .searchFocused($searchFocused)
+        .onChange(of: model.searchFocusRequest) { searchFocused = true }
+        .focusedSceneValue(\.repository, model)
         .navigationTitle(model.repo.workingDirectory.lastPathComponent)
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
@@ -125,7 +127,7 @@ struct RepositoryView: View {
         }
         .onChange(of: OperationLog.shared.lastFailure?.id) {
             // A failed operation expands the log by itself, so you can see exactly what git said.
-            if let f = OperationLog.shared.lastFailure, f.directory == model.repo.workingDirectory { showLog = true }
+            if let f = OperationLog.shared.lastFailure, f.directory == model.repo.workingDirectory { model.showLog = true }
         }
     }
 
@@ -140,26 +142,24 @@ struct RepositoryView: View {
             Toggle(isOn: $model.showAllBranches) {
                 Label("All Branches", systemImage: "arrow.triangle.branch")
             }
-            .help("Show the history of all branches or only the current one")
+            .help("Show the history of all branches or only the current one (⇧⌘B)")
 
             Button {
-                showBranches.toggle()
+                model.showBranches.toggle()
             } label: {
                 Label("Branches", systemImage: "list.bullet.indent")
             }
             .help("Branches and tags (⌘B)")
-            .keyboardShortcut("b")
-            .popover(isPresented: $showBranches, arrowEdge: .bottom) { BranchesPopover(model: model) }
+            .popover(isPresented: $model.showBranches, arrowEdge: .bottom) { BranchesPopover(model: model) }
 
             Button {
-                showStash.toggle()
+                model.showStash.toggle()
             } label: {
                 Label("Stash", systemImage: "tray")
             }
             .badge(model.stashes.count)
             .help("Stash (⌘S)")
-            .keyboardShortcut("s")
-            .popover(isPresented: $showStash, arrowEdge: .bottom) { StashPopover(model: model) }
+            .popover(isPresented: $model.showStash, arrowEdge: .bottom) { StashPopover(model: model) }
         }
 
         ToolbarItemGroup {
@@ -168,7 +168,7 @@ struct RepositoryView: View {
             } label: {
                 Label("Fetch", systemImage: "arrow.down.circle")
             }
-            .help("git fetch --all --prune")
+            .help("git fetch --all --prune (⇧⌘F)")
             .disabled(model.busy != nil)
 
             Menu {
@@ -179,7 +179,7 @@ struct RepositoryView: View {
             } primaryAction: {
                 Task { await model.pull(rebase: false) }
             }
-            .help(model.hasUpstream ? "git pull" : "This branch has no upstream")
+            .help(model.hasUpstream ? "git pull (⇧⌘L)" : "This branch has no upstream")
             .disabled(model.busy != nil || !model.hasUpstream)
 
             Button {
@@ -187,7 +187,7 @@ struct RepositoryView: View {
             } label: {
                 Label(pushTitle, systemImage: "arrow.up.to.line")
             }
-            .help(model.hasUpstream ? "git push" : "git push --set-upstream")
+            .help(model.hasUpstream ? "git push (⇧⌘P)" : "git push --set-upstream (⇧⌘P)")
             .disabled(model.busy != nil || model.currentBranch == nil)
         }
 
@@ -197,7 +197,6 @@ struct RepositoryView: View {
             } label: {
                 Label("Undo", systemImage: "arrow.uturn.backward")
             }
-            .keyboardShortcut("z", modifiers: [.command, .option])
             .help(undoHelp)
             .disabled(!model.canUndo)
 
@@ -209,15 +208,13 @@ struct RepositoryView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .keyboardShortcut("r")
             .help("Reload the repository (⌘R)")
 
             Button {
-                showInspector.toggle()
+                model.showInspector.toggle()
             } label: {
                 Label("Inspector", systemImage: "sidebar.trailing")
             }
-            .keyboardShortcut("i", modifiers: [.command, .option])
             .help("Show or hide the inspector (⌥⌘I)")
         }
     }
@@ -281,10 +278,8 @@ private struct WorkingTreeBar: View {
         .padding(.vertical, 6)
         .background(model.inspector == .workingTree ? Color.accentColor.opacity(0.12) : Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture {
-            model.inspector = .workingTree
-            model.selectedCommitID = nil
-        }
+        .onTapGesture { model.showWorkingTree() }
+        .help("Changes and commit (⇧⌘C)")
     }
 
     private func plural(_ n: Int) -> String {
@@ -295,7 +290,6 @@ private struct WorkingTreeBar: View {
 /// Bottom bar: the running operation or the last error, and the log button.
 private struct StatusBar: View {
     @Bindable var model: RepositoryModel
-    @Binding var showLog: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -312,13 +306,12 @@ private struct StatusBar: View {
             }
             Spacer()
             HostingStatusView(model: model)
-            Toggle(isOn: $showLog) {
+            Toggle(isOn: $model.showLog) {
                 Label("Log", systemImage: "terminal")
             }
             .toggleStyle(.button)
             .buttonStyle(.borderless)
             .controlSize(.small)
-            .keyboardShortcut("l", modifiers: [.command, .option])
             .help("Operation Log (⌥⌘L)")
         }
         .font(.caption)

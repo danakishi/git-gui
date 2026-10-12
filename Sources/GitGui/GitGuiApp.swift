@@ -17,10 +17,7 @@ struct GitGuiApp: App {
         }
         .defaultSize(width: 1440, height: 900)
         .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("Open Repository…") { store.presentOpenPanel() }
-                    .keyboardShortcut("o")
-            }
+            AppCommands(store: store)
         }
 
         Settings {

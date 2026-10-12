@@ -43,6 +43,20 @@ enum DebugScreenshot {
             .map { $0.dropFirst("--debug-git=".count).split(separator: " ").map(String.init) }
     }
 
+    /// `--library=<path>`: use a custom repository list file instead of Application Support.
+    nonisolated static var libraryPath: String? {
+        ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix("--library=") }
+            .map { String($0.dropFirst("--library=".count)) }
+    }
+
+    /// `--palette=<query>`: open the ⌘K Command Palette with this query (may be empty).
+    nonisolated static var paletteQuery: String? {
+        ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix("--palette=") }
+            .map { String($0.dropFirst("--palette=".count)) }
+    }
+
     /// `--working-tree`: show the working tree panel.
     nonisolated static var showWorkingTree: Bool {
         ProcessInfo.processInfo.arguments.contains("--working-tree")
@@ -100,6 +114,9 @@ enum DebugScreenshot {
         if ProcessInfo.processInfo.arguments.contains("--dump-views") {
             dump(frameView, window: window, depth: 0)
         }
+        if ProcessInfo.processInfo.arguments.contains("--sidebar") {
+            captureSidebar(in: frameView, to: path)
+        }
         guard let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { return }
         frameView.cacheDisplay(in: frameView.bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:]) else { return }
@@ -108,6 +125,21 @@ enum DebugScreenshot {
         } catch {
             FileHandle.standardError.write(Data("screenshot: \(error)\n".utf8))
         }
+    }
+
+    /// `--sidebar`: additionally captures the sidebar list to `<path>.sidebar.png`.
+    /// In the window snapshot the sidebar is empty: its glass background doesn't make it into the render cache,
+    /// so the list itself is rendered separately.
+    @MainActor
+    private static func captureSidebar(in root: NSView, to path: String) {
+        func find(_ v: NSView) -> NSView? {
+            if v is NSOutlineView { return v }
+            for sub in v.subviews { if let f = find(sub) { return f } }
+            return nil
+        }
+        guard let list = find(root), let rep = list.bitmapImageRepForCachingDisplay(in: list.visibleRect) else { return }
+        list.cacheDisplay(in: list.visibleRect, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path + ".sidebar.png"))
     }
 
     /// `--dump-views`: prints the frames of split/scroll views to stderr in window coordinates

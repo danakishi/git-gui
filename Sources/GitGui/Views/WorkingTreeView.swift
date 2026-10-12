@@ -269,7 +269,6 @@ private struct CommitForm: View {
                         .frame(minWidth: 90)
                 }
                 .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!model.canCommit || model.busy != nil)
                 .help("Commit (⌘↩)")
             }

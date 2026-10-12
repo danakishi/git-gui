@@ -23,7 +23,6 @@ struct OperationBanner: View {
                         .help("Drop the current commit and move on")
                 }
                 Button("Continue") { Task { await model.continueOperation() } }
-                    .keyboardShortcut(.return, modifiers: [.command, .shift])
                     .help(conflicts > 0 ? "Resolve the conflicts first" : "Continue (⇧⌘↩)")
                     .disabled(conflicts > 0)
             }
