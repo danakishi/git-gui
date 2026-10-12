@@ -5,16 +5,19 @@
 #   scripts/build-app.sh release    # release build
 #   scripts/build-app.sh run        # debug build and launch
 #   scripts/build-app.sh release run
+#   scripts/build-app.sh release universal   # arm64 + x86_64, for distribution
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG=debug
 RUN=0
+ARCHS=()
 for arg in "$@"; do
   case "$arg" in
     release) CONFIG=release ;;
     run) RUN=1 ;;
+    universal) ARCHS=(--arch arm64 --arch x86_64) ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -22,9 +25,9 @@ done
 NAME=GitGui
 BUNDLE_ID=com.danakishi.gitgui
 APP=".build/$NAME.app"
-BIN=$(swift build -c "$CONFIG" --show-bin-path)
+BIN=$(swift build -c "$CONFIG" "${ARCHS[@]}" --show-bin-path)
 
-swift build -c "$CONFIG" --product "$NAME"
+swift build -c "$CONFIG" "${ARCHS[@]}" --product "$NAME"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -34,6 +37,7 @@ cp "$BIN/$NAME" "$APP/Contents/MacOS/$NAME"
 for b in "$BIN"/*.bundle(N); do cp -R "$b" "$APP/Contents/Resources/"; done
 
 VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION=${VERSION#v}   # tag v1.2.3 -> version 1.2.3
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

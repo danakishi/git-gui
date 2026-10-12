@@ -41,6 +41,19 @@ work exactly as they do in the terminal.
 | Switch repository | ⌘1…⌘9, ⌥⌘↑ / ⌥⌘↓ |
 | Open in editor / Terminal | ⌥⌘E / ⌥⌘T |
 
+## Download
+
+Grab `GitGui.zip` from the [latest release](https://github.com/danakishi/git-gui/releases/latest),
+unzip it and move `GitGui.app` to Applications. It runs on macOS 26 or later, on Apple silicon
+and Intel.
+
+The app is not notarized, so macOS blocks the first launch. Either open it once via
+System Settings → Privacy & Security → Open Anyway, or clear the quarantine flag:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/GitGui.app
+```
+
 ## Building
 
 Requires macOS 26 or later and Swift 6.2 (Xcode or the command line tools). No Xcode
@@ -50,6 +63,7 @@ project is needed: the app is a Swift package.
 scripts/build-app.sh          # debug build into .build/GitGui.app
 scripts/build-app.sh run      # build and launch
 scripts/build-app.sh release  # optimised build
+scripts/build-app.sh release universal  # arm64 + x86_64, as in the releases
 swift test                    # unit tests, many of them against a real git
 ```
 
