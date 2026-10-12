@@ -1,6 +1,8 @@
-<img src="docs/logo.svg" width="128" alt="GitGui logo" align="right">
+<p align="center">
+  <img src="docs/logo.svg" width="128" alt="GitGui logo">
+</p>
 
-# GitGui
+<h1 align="center">GitGui</h1>
 
 A native Git client for macOS, written in SwiftUI, with a GitKraken-style commit graph.
 It drives the system `git` binary, so your config, SSH keys, credential helpers and hooks
