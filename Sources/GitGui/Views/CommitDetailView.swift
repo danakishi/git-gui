@@ -20,6 +20,11 @@ struct CommitDetailView: View {
                     List(detail.files, selection: $selectedFile) { file in
                         FileRow(file: file).tag(file.id)
                     }
+                    .contextMenu(forSelectionType: FileDiff.ID.self) { ids in
+                        if let file = detail.files.first(where: { ids.contains($0.id) }) {
+                            fileMenu(file, commit: detail.commit)
+                        }
+                    }
                     .overlay {
                         if detail.files.isEmpty {
                             ContentUnavailableView("No Changed Files", systemImage: "doc")
@@ -100,6 +105,20 @@ struct CommitDetailView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func fileMenu(_ file: FileDiff, commit: Commit) -> some View {
+        if !file.isBinary {
+            Button("Open in External Diff Tool") { Task { await model.externalDiff(commit: commit, path: file.path) } }
+        }
+        if file.status != .deleted {
+            Button("Open in Editor") { model.openFile(file.path) }
+                .help("Opens the file in the working tree, not the version from the commit")
+            Button("Show in Finder") { model.revealInFinder(file.path) }
+        }
+        Divider()
+        Button("Copy Path") { model.copyToPasteboard(file.path) }
     }
 
     /// CI, PRs, and a link to the commit on GitHub/GitLab.

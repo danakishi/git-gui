@@ -7,8 +7,8 @@ enum AppCommand: String, CaseIterable, Identifiable {
     case fetch, pull, pullRebase, push
     case newBranch, newTag, branches, stashList, stashPush
     case stageAll, unstageAll, commit
-    case continueOperation, abortOperation, undo
-    case refresh, revealInFinder, openInTerminal
+    case resolveConflicts, continueOperation, abortOperation, undo
+    case refresh, revealInFinder, openInEditor, openInTerminal
     // View
     case showChanges, toggleInspector, toggleLog, toggleAllBranches, find
     // Go
@@ -33,7 +33,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
     /// Whether the command is preceded by a separator in the menu.
     var startsGroup: Bool {
         switch self {
-        case .newBranch, .stageAll, .continueOperation, .refresh, .toggleAllBranches, .find, .previousRepository: true
+        case .newBranch, .stageAll, .resolveConflicts, .refresh, .toggleAllBranches, .find, .previousRepository: true
         default: false
         }
     }
@@ -52,11 +52,13 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .stageAll: "Stage All"
         case .unstageAll: "Unstage All"
         case .commit: "Commit"
+        case .resolveConflicts: "Resolve Conflicts…"
         case .continueOperation: "Continue Merge/Rebase"
         case .abortOperation: "Abort Merge/Rebase"
         case .undo: "Undo Last Action"
         case .refresh: "Refresh"
         case .revealInFinder: "Show in Finder"
+        case .openInEditor: "Open in Editor"
         case .openInTerminal: "Open in Terminal"
         case .showChanges: "Changes & Commit"
         case .toggleInspector: "Inspector"
@@ -86,11 +88,13 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .stageAll: "stage add index"
         case .unstageAll: "unstage reset index"
         case .commit: "commit"
+        case .resolveConflicts: "conflict merge"
         case .continueOperation: "continue"
         case .abortOperation: "abort"
         case .undo: "undo reflog"
         case .refresh: "reload"
         case .revealInFinder: "finder folder"
+        case .openInEditor: "editor code"
         case .openInTerminal: "terminal shell"
         case .showChanges: "working tree status stage"
         case .toggleInspector: "inspector panel"
@@ -117,11 +121,13 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .stageAll: "plus.circle"
         case .unstageAll: "minus.circle"
         case .commit: "checkmark.circle"
+        case .resolveConflicts: "exclamationmark.triangle"
         case .continueOperation: "play.circle"
         case .abortOperation: "xmark.circle"
         case .undo: "arrow.uturn.backward"
         case .refresh: "arrow.clockwise"
         case .revealInFinder: "folder"
+        case .openInEditor: "chevron.left.forwardslash.chevron.right"
         case .openInTerminal: "terminal"
         case .showChanges: "pencil.circle"
         case .toggleInspector: "sidebar.trailing"
@@ -152,6 +158,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .continueOperation: KeyboardShortcut(.return, modifiers: [.command, .shift])
         case .undo: KeyboardShortcut("z", modifiers: [.command, .option])
         case .refresh: KeyboardShortcut("r")
+        case .openInEditor: KeyboardShortcut("e", modifiers: [.command, .option])
         case .openInTerminal: KeyboardShortcut("t", modifiers: [.command, .option])
         case .showChanges: KeyboardShortcut("c", modifiers: [.command, .shift])
         case .toggleInspector: KeyboardShortcut("i", modifiers: [.command, .option])
@@ -163,7 +170,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .previousRepository: KeyboardShortcut(.upArrow, modifiers: [.command, .option])
         case .nextRepository: KeyboardShortcut(.downArrow, modifiers: [.command, .option])
         case .openRepository: KeyboardShortcut("o")
-        case .pullRebase, .abortOperation, .revealInFinder: nil
+        case .pullRebase, .resolveConflicts, .abortOperation, .revealInFinder: nil
         }
     }
 
@@ -188,11 +195,13 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .stageAll: return idle && !model.unstagedFiles.isEmpty
         case .unstageAll: return idle && !model.stagedFiles.isEmpty
         case .commit: return idle && model.canCommit
+        case .resolveConflicts: return idle && model.conflictCount > 0
         case .continueOperation: return idle && model.operation != nil && model.conflictCount == 0
         case .abortOperation: return idle && model.operation != nil
         case .undo: return model.sheet == nil && model.canUndo
         case .goToHead: return model.head?.sha != nil
-        case .previousRepository, .nextRepository: return store.entries.count > 1
+        case .openInEditor: return Preferences.editor != nil
+        case .previousRepository, .nextRepository: return model.sheet == nil && store.entries.count > 1
         default: return true
         }
     }
@@ -220,6 +229,8 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .stageAll: Task { await model.stageAll() }
         case .unstageAll: Task { await model.unstageAll() }
         case .commit: Task { await model.commit() }
+        case .resolveConflicts:
+            if let first = model.status?.entries.first(where: \.isConflict) { model.sheet = .conflict(path: first.path) }
         case .continueOperation: Task { await model.continueOperation() }
         case .abortOperation: Task { await model.abortOperation() }
         case .undo: Task { await model.undo() }
@@ -229,6 +240,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
                 await model.refreshHosting()
             }
         case .revealInFinder: NSWorkspace.shared.activateFileViewerSelecting([model.repo.workingDirectory])
+        case .openInEditor: model.openInEditor()
         case .openInTerminal: model.openInTerminal()
         case .showChanges: model.showWorkingTree()
         case .toggleInspector: model.showInspector.toggle()

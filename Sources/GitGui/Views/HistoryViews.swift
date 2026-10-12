@@ -16,6 +16,10 @@ struct OperationBanner: View {
                     Text(hint(conflicts)).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if let first = model.status?.entries.first(where: \.isConflict) {
+                    Button("Resolve…") { model.sheet = .conflict(path: first.path) }
+                        .help("Open the first conflicted file in the conflict editor")
+                }
                 Button("Abort", role: .destructive) { Task { await model.abortOperation() } }
                     .help("Restore everything to the state before the operation started")
                 if op.kind.canSkip {

@@ -67,7 +67,7 @@ public struct GitInvocation: Sendable, Identifiable {
 
     static let mutatingCommands: Set<String> = [
         "add", "rm", "restore", "reset", "apply", "commit", "checkout", "switch", "branch", "tag",
-        "fetch", "pull", "push", "merge", "rebase", "cherry-pick", "revert", "stash", "clean", "remote",
+        "fetch", "pull", "push", "merge", "mergetool", "rebase", "cherry-pick", "revert", "stash", "clean", "remote",
     ]
 }
 

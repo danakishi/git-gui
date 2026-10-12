@@ -119,9 +119,14 @@ struct WorkingTreeView: View {
             let files = allFiles.filter { ids.contains($0.id) }
             if !files.isEmpty { fileMenu(files) }
         } primaryAction: { ids in
-            // Double-click moves a file between the index and the working tree.
+            // Double-click moves a file between the index and the working tree,
+            // and opens a conflicted file in the conflict editor.
             let files = allFiles.filter { ids.contains($0.id) }
-            toggleStage(files)
+            if files.count == 1, files[0].entry.isConflict {
+                model.sheet = .conflict(path: files[0].entry.path)
+            } else {
+                toggleStage(files)
+            }
         }
         .overlay {
             if allFiles.isEmpty {
@@ -172,11 +177,12 @@ struct WorkingTreeView: View {
         let conflicts = files.filter(\.entry.isConflict)
         if !conflicts.isEmpty {
             // During a rebase, HEAD is the branch being rebased onto, and incoming is the commit being replayed.
+            if conflicts.count == 1 {
+                Button("Resolve Conflict…") { model.sheet = .conflict(path: conflicts[0].entry.path) }
+                Button("Open in External Merge Tool") { Task { await model.externalMerge(conflicts[0].entry.path) } }
+            }
             Button("Take HEAD Version (ours)") { Task { await model.resolveConflict(conflicts, ours: true) } }
             Button("Take Incoming Version (theirs)") { Task { await model.resolveConflict(conflicts, ours: false) } }
-            if conflicts.count == 1 {
-                Button("Open in Editor") { model.openFile(conflicts[0].entry.path) }
-            }
             Divider()
         }
         if !unstaged.isEmpty {
@@ -191,7 +197,14 @@ struct WorkingTreeView: View {
         }
         Divider()
         if files.count == 1 {
-            Button("Show in Finder") { model.revealInFinder(files[0].entry.path) }
+            let file = files[0]
+            if !file.entry.isConflict, file.entry.index != .untracked {
+                Button("Open in External Diff Tool") { Task { await model.externalDiff(file) } }
+            }
+            if file.status != .deleted {
+                Button("Open in Editor") { model.openFile(file.entry.path) }
+            }
+            Button("Show in Finder") { model.revealInFinder(file.entry.path) }
         }
         Button("Copy Path") { model.copyToPasteboard(files.map(\.entry.path).joined(separator: "\n")) }
     }
@@ -208,7 +221,13 @@ struct WorkingTreeView: View {
 
     @ViewBuilder
     private var diffArea: some View {
-        if let diff, let focused {
+        if let focused, focused.entry.isConflict {
+            VStack(spacing: 0) {
+                conflictBar(focused)
+                Divider()
+                if let diff { DiffView(file: diff) } else { Spacer() }
+            }
+        } else if let diff, let focused {
             DiffView(file: diff, hunkActions: hunkActions(for: focused, diff: diff))
         } else if selection.count > 1 {
             ContentUnavailableView("\(selection.count) Files Selected", systemImage: "doc.on.doc",
@@ -220,6 +239,24 @@ struct WorkingTreeView: View {
         } else {
             Color.clear
         }
+    }
+
+    /// Shown above the diff of a conflicted file: how to resolve it.
+    private func conflictBar(_ file: WorkingFile) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text("Conflict").fontWeight(.semibold)
+            Spacer()
+            Button("External Tool") { Task { await model.externalMerge(file.entry.path) } }
+            Button("Resolve…") { model.sheet = .conflict(path: file.entry.path) }
+                .buttonStyle(.borderedProminent)
+        }
+        .controlSize(.small)
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.orange.opacity(0.12))
+        .disabled(model.busy != nil)
     }
 
     private func hunkActions(for file: WorkingFile, diff: FileDiff) -> HunkActions? {
@@ -243,7 +280,7 @@ private struct CommitForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             TextEditor(text: $model.commitMessage)
-                .font(.body)
+                .codeFont()
                 .focused($focused)
                 .scrollContentBackground(.hidden)
                 .padding(4)

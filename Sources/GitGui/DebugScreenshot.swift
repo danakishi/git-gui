@@ -57,6 +57,20 @@ enum DebugScreenshot {
             .map { String($0.dropFirst("--palette=".count)) }
     }
 
+    /// `--conflict=<path>`: open the conflict editor for this file.
+    nonisolated static var conflictPath: String? {
+        ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix("--conflict=") }
+            .map { String($0.dropFirst("--conflict=".count)) }
+    }
+
+    /// `--settings=N`: open Settings on tab N (zero-based).
+    nonisolated static var settingsTab: Int? {
+        ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix("--settings=") }
+            .flatMap { Int($0.dropFirst("--settings=".count)) }
+    }
+
     /// `--working-tree`: show the working tree panel.
     nonisolated static var showWorkingTree: Bool {
         ProcessInfo.processInfo.arguments.contains("--working-tree")
@@ -96,8 +110,10 @@ enum DebugScreenshot {
 
     @MainActor
     private static func visibleWindow() -> NSWindow? {
+        // The topmost window (Settings, if open), and if it has a sheet, the sheet.
         // NSApp appears after App.init, so the first check is deferred.
-        (NSApp?.windows ?? []).first { $0.isVisible && !$0.isMiniaturized && $0.contentView != nil }
+        let window = (NSApp?.orderedWindows ?? []).first { $0.isVisible && !$0.isMiniaturized && $0.contentView != nil }
+        return window?.attachedSheet ?? window
     }
 
     @MainActor

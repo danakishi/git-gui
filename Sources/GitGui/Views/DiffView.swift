@@ -34,7 +34,7 @@ struct DiffView: View {
                             }
                         }
                     }
-                    .font(.system(size: 12, design: .monospaced))
+                    .codeFont()
                     .frame(minWidth: geo.size.width, alignment: .leading)
                 }
             }

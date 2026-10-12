@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(RepositoryStore.self) private var store
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         @Bindable var store = store
@@ -30,6 +31,9 @@ struct ContentView: View {
                         .padding(.top, 60)
                 }
             }
+        }
+        .onAppear {
+            if DebugScreenshot.settingsTab != nil { openSettings() }
         }
         .alert("Error", isPresented: Binding(
             get: { store.lastError != nil },
@@ -95,6 +99,8 @@ struct RepositoryView: View {
         .sheet(item: $model.sheet) { sheet in
             if case .interactiveRebase(let base, let commits) = sheet {
                 InteractiveRebaseView(model: model, base: base, commits: commits)
+            } else if case .conflict(let path) = sheet {
+                ConflictEditorView(model: model, path: path)
             } else {
                 RepositorySheetView(sheet: sheet, model: model)
             }

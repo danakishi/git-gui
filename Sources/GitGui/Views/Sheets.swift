@@ -9,6 +9,8 @@ enum RepositorySheet: Identifiable {
     case stash
     /// Commits from oldest to newest; `base == nil` means from the root.
     case interactiveRebase(base: String?, commits: [Commit])
+    /// Conflict editor for a file.
+    case conflict(path: String)
 
     var id: String {
         switch self {
@@ -17,6 +19,7 @@ enum RepositorySheet: Identifiable {
         case .newTag(let s): "tag:\(s ?? "")"
         case .stash: "stash"
         case .interactiveRebase(let base, _): "rebase:\(base ?? "")"
+        case .conflict(let path): "conflict:\(path)"
         }
     }
 }
@@ -50,8 +53,8 @@ struct RepositorySheetView: View {
             case .stash:
                 TextField("Message (optional)", text: $name).focused($nameFocused)
                 Toggle("Include untracked files", isOn: $flag)
-            case .interactiveRebase:
-                // Has its own window, see InteractiveRebaseView.
+            case .interactiveRebase, .conflict:
+                // These have their own windows, see InteractiveRebaseView and ConflictEditorView.
                 EmptyView()
             }
             HStack {
@@ -78,6 +81,7 @@ struct RepositorySheetView: View {
         case .newTag: "New Tag"
         case .stash: "Stash Changes"
         case .interactiveRebase: "Interactive Rebase"
+        case .conflict(let path): path
         }
     }
 
@@ -87,7 +91,7 @@ struct RepositorySheetView: View {
         case .newBranch(nil): "From current HEAD"
         case .newTag(let at?): "On commit \(at.prefix(8))"
         case .newTag(nil): "On current HEAD"
-        case .renameBranch, .stash, .interactiveRebase: nil
+        case .renameBranch, .stash, .interactiveRebase, .conflict: nil
         }
     }
 
@@ -97,7 +101,7 @@ struct RepositorySheetView: View {
         case .renameBranch: "Rename"
         case .newTag: "Create"
         case .stash: "Stash"
-        case .interactiveRebase: "Start"
+        case .interactiveRebase, .conflict: "Start"
         }
     }
 
@@ -116,7 +120,7 @@ struct RepositorySheetView: View {
             case .renameBranch(let ref): await model.renameBranch(ref.shortName, to: n)
             case .newTag(let at): await model.createTag(n, at: at, message: message)
             case .stash: await model.stashPush(message: n, includeUntracked: flag)
-            case .interactiveRebase: break
+            case .interactiveRebase, .conflict: break
             }
         }
     }

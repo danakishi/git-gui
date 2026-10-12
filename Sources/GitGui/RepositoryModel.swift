@@ -159,6 +159,9 @@ final class RepositoryModel {
         if DebugScreenshot.showWorkingTree {
             inspector = .workingTree
         }
+        if let path = DebugScreenshot.conflictPath {
+            sheet = .conflict(path: path)
+        }
         for args in DebugScreenshot.debugGitCommands {
             await perform("git \(args.joined(separator: " "))") { try await repo.run(args) }
         }
@@ -327,7 +330,7 @@ final class RepositoryModel {
         guard let text = try? String(contentsOf: repo.workingDirectory.appending(path: path), encoding: .utf8) else {
             return false
         }
-        return text.hasPrefix("<<<<<<< ") || text.contains("\n<<<<<<< ")
+        return ConflictFile.hasMarkers(text)
     }
 
     func unstage(_ files: [WorkingFile]) async {
@@ -657,9 +660,55 @@ final class RepositoryModel {
         await perform("Interactive rebase") { try await repo.interactiveRebase(base: base, steps: steps) }
     }
 
-    /// Opens a working tree file in the default app.
+    /// Opens a working tree file in the editor from Settings or in the default app.
     func openFile(_ path: String) {
-        NSWorkspace.shared.open(repo.workingDirectory.appending(path: path))
+        Preferences.open([repo.workingDirectory.appending(path: path)], appPath: Preferences.editor)
+    }
+
+    /// Opens the whole repository in the editor from Settings.
+    func openInEditor() {
+        guard let editor = Preferences.editor else { return }
+        Preferences.open([repo.workingDirectory], appPath: editor)
+    }
+
+    // External tools. Not through `perform`: a tool window can stay open
+    // for as long as it likes, and other operations must keep working meanwhile.
+
+    func externalDiff(_ file: WorkingFile) async {
+        await runTool { try await repo.diffTool(path: file.entry.path, staged: file.staged, tool: Preferences.diffTool) }
+    }
+
+    func externalDiff(commit: Commit, path: String) async {
+        await runTool { try await repo.diffTool(commit: commit, path: path, tool: Preferences.diffTool) }
+    }
+
+    func externalMerge(_ path: String) async {
+        await runTool { try await repo.mergeTool(path: path, tool: Preferences.mergeTool) }
+        await reload()
+    }
+
+    private func runTool(_ operation: () async throws -> Void) async {
+        do {
+            try await operation()
+        } catch {
+            self.error = String(describing: error)
+        }
+    }
+
+    /// Writes the result of the conflict editor and, if requested, marks the file as resolved.
+    func saveResolution(_ path: String, text: String, markResolved: Bool) async {
+        let url = repo.workingDirectory.appending(path: path)
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            self.error = "Couldn't write \(path): \(error.localizedDescription)"
+            return
+        }
+        if markResolved {
+            await perform("Marking \(path) as resolved") { try await repo.stage([path]) }
+        } else {
+            await reload()
+        }
     }
 
     // Hosting provider
@@ -682,8 +731,10 @@ final class RepositoryModel {
     // Misc
 
     func openInTerminal() {
-        guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else { return }
-        NSWorkspace.shared.open([repo.workingDirectory], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
+        let terminal = Preferences.terminal
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")?.path
+        guard let terminal else { return }
+        Preferences.open([repo.workingDirectory], appPath: terminal)
     }
 
     func revealInFinder(_ path: String) {
