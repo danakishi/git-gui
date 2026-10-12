@@ -1,4 +1,5 @@
 import GitCore
+import Hosting
 import SwiftUI
 
 /// Selected commit panel: metadata, file list, and the diff of the selected file.
@@ -91,6 +92,7 @@ struct CommitDetailView: View {
                             HStack { RefBadges(refs: refs) }
                         }
                     }
+                    hostingRows(detail.commit)
                 }
                 .font(.callout)
             }
@@ -98,6 +100,37 @@ struct CommitDetailView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// CI, PRs, and a link to the commit on GitHub/GitLab.
+    @ViewBuilder
+    private func hostingRows(_ commit: Commit) -> some View {
+        let hosting = model.hosting
+        if let ci = hosting.ciStatus[commit.id] {
+            GridRow {
+                Text("CI").foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    CIStatusIcon(status: ci, size: 12)
+                    Text(ci.title)
+                }
+            }
+        }
+        ForEach(hosting.pullRequestsByCommit[commit.id] ?? []) { pr in
+            GridRow {
+                Text("PR").foregroundStyle(.secondary)
+                Button("#\(pr.id) \(pr.title)") { model.open(pr.webURL) }
+                    .buttonStyle(.link)
+                    .lineLimit(1)
+                    .help("\(pr.sourceBranch) → \(pr.targetBranch), by \(pr.author)")
+            }
+        }
+        if let provider = hosting.provider {
+            GridRow {
+                Text("").gridCellUnsizedAxes(.horizontal)
+                Button("Open on \(provider.displayName)") { model.open(provider.webURL(forCommit: commit.id)) }
+                    .buttonStyle(.link)
+            }
+        }
     }
 }
 

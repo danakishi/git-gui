@@ -1,6 +1,7 @@
 import AppKit
 import GitCore
 import GraphLayout
+import Hosting
 import SwiftUI
 
 /// Commit list with a graph on top of NSTableView (see CommitTableView).
@@ -13,6 +14,9 @@ struct CommitListView: View {
             graphRows: model.isFiltering ? [:] : model.graphRows,
             refsByCommit: model.refsByCommit,
             headSHA: model.head?.sha,
+            pullRequestsByCommit: model.hosting.pullRequestsByCommit,
+            ciStatus: model.hosting.ciStatus,
+            hostingVersion: model.hosting.version,
             visibleLanes: visibleLanes,
             selection: $model.selectedCommitID,
             onReachEnd: { Task { await model.loadMore() } },
@@ -74,6 +78,26 @@ struct CommitListView: View {
                     }
                 })
             }
+        }
+
+        if let provider = model.hosting.provider {
+            menu.addItem(.separator())
+            for pr in model.hosting.pullRequestsByCommit[commit.id] ?? [] {
+                menu.addItem(ClosureMenuItem("Open PR #\(pr.id)") { model.open(pr.webURL) })
+            }
+            // A local branch and its upstream often point at the same commit: one item per remote branch.
+            var offered = Set<String>()
+            for ref in refs where ref.kind == .localBranch || ref.kind == .remoteBranch {
+                if model.canCreatePullRequest(from: ref), let branch = model.hosting.serverBranch(for: ref),
+                   offered.insert(branch).inserted {
+                    menu.addItem(ClosureMenuItem("Create Pull Request from \(ref.shortName)") {
+                        model.createPullRequest(from: ref)
+                    })
+                }
+            }
+            menu.addItem(ClosureMenuItem("Open Commit on \(provider.displayName)") {
+                model.open(provider.webURL(forCommit: commit.id))
+            })
         }
 
         menu.addItem(.separator())

@@ -22,5 +22,6 @@ let package = Package(
         ),
         .testTarget(name: "GitCoreTests", dependencies: ["GitCore"]),
         .testTarget(name: "GraphLayoutTests", dependencies: ["GraphLayout"]),
+        .testTarget(name: "HostingTests", dependencies: ["Hosting"]),
     ]
 )

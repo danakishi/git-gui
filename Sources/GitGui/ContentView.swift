@@ -75,6 +75,17 @@ struct RepositoryView: View {
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
         .task { await model.start() }
+        .task {
+            // PR and CI refresh every two minutes while the window is frontmost. The task lives
+            // as long as the repository is shown, so background repositories don't hit the API.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(120))
+                if NSApp.isActive { await model.refreshHosting() }
+            }
+        }
+        .onChange(of: Accounts.shared.generation) {
+            Task { await model.refreshHosting() }
+        }
         .sheet(item: $model.sheet) { sheet in
             RepositorySheetView(sheet: sheet, model: model)
         }
@@ -163,7 +174,10 @@ struct RepositoryView: View {
 
         ToolbarItemGroup {
             Button {
-                Task { await model.reload() }
+                Task {
+                    await model.reload()
+                    await model.refreshHosting()
+                }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
@@ -262,6 +276,7 @@ private struct StatusBar: View {
                 Text("Ready").foregroundStyle(.secondary)
             }
             Spacer()
+            HostingStatusView(model: model)
             Toggle(isOn: $showLog) {
                 Label("Log", systemImage: "terminal")
             }

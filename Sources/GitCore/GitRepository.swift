@@ -230,6 +230,14 @@ public struct GitRepository: Sendable, Hashable {
         try await run(["remote"]).text.split(separator: "\n").map(String.init)
     }
 
+    /// URL of a remote, or `nil` if there is none.
+    public func remoteURL(_ name: String) async throws -> String? {
+        let out = try await run(["remote", "get-url", name], check: false)
+        guard out.exitCode == 0 else { return nil }
+        let url = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.isEmpty ? nil : url
+    }
+
     public func fetch(prune: Bool = true) async throws {
         var args = ["fetch", "--all"]
         if prune { args.append("--prune") }

@@ -22,5 +22,9 @@ struct GitGuiApp: App {
                     .keyboardShortcut("o")
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 }

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import GitCore
 import GraphLayout
+import Hosting
 import Observation
 
 /// Details of the selected commit.
@@ -79,6 +80,9 @@ final class RepositoryModel {
     var sheet: RepositorySheet?
     var confirmForceDelete: Ref?
 
+    /// PRs/MRs and CI from GitHub or GitLab.
+    let hosting = HostingState()
+
     @ObservationIgnored private var watcher: RepositoryWatcher?
     @ObservationIgnored private var reloadPending = false
 
@@ -130,6 +134,7 @@ final class RepositoryModel {
             }
         }
         await reload()
+        await refreshHosting()
 
         // Debug flags for UI snapshots.
         if let n = DebugScreenshot.selectRow, n < commits.count {
@@ -175,6 +180,7 @@ final class RepositoryModel {
             self.hasMore = commits.count == Self.pageSize
             self.refsByCommit = Dictionary(grouping: refs, by: \.target)
             relayout()
+            hosting.relink(refs: refs, commits: commits)
             if let id = selectedCommitID, !commits.contains(where: { $0.id == id }), !stashes.contains(where: { $0.sha == id }) {
                 selectedCommitID = nil
             } else if selectedCommitID != nil {
@@ -197,9 +203,15 @@ final class RepositoryModel {
             graph.append(more)
             for row in graph.rows.suffix(more.count) { graphRows[row.commitID] = row }
             graphWidth = graph.maxWidth
+            hosting.relink(refs: refs, commits: commits)
         } catch {
             self.error = String(describing: error)
         }
+    }
+
+    /// Requests PRs and CI from the hosting provider. Errors are shown in the status bar, not in a general alert.
+    func refreshHosting() async {
+        await hosting.refresh(repo: repo, head: head?.sha, refs: refs, commits: commits)
     }
 
     private func relayout() {
@@ -414,17 +426,21 @@ final class RepositoryModel {
 
     // Remotes
 
+    // After talking to the server, new branches and PRs appear: ask the hosting provider right away.
+
     func fetch() async {
-        await perform("Fetch") { try await repo.fetch() }
+        if await perform("Fetch", { try await repo.fetch() }) { await refreshHosting() }
     }
 
     func pull(rebase: Bool) async {
-        await perform(rebase ? "Pull --rebase" : "Pull") { try await repo.pull(rebase: rebase) }
+        if await perform(rebase ? "Pull --rebase" : "Pull", { try await repo.pull(rebase: rebase) }) {
+            await refreshHosting()
+        }
     }
 
     /// Pushes the current branch; without an upstream, sets it to the first remote.
     func push() async {
-        await perform("Push") {
+        let ok = await perform("Push") {
             if hasUpstream {
                 try await repo.push()
             } else {
@@ -438,6 +454,7 @@ final class RepositoryModel {
                 try await repo.push(remote: remote, branch: branch, setUpstream: true)
             }
         }
+        if ok { await refreshHosting() }
     }
 
     // Stash
@@ -460,6 +477,23 @@ final class RepositoryModel {
     /// Shows a stash in the inspector as a commit.
     func show(_ entry: StashEntry) {
         selectedCommitID = entry.sha
+    }
+
+    // Hosting provider
+
+    /// Opens a link in the default browser.
+    func open(_ url: URL) {
+        NSWorkspace.shared.open(url)
+    }
+
+    /// A branch from which a PR can be created: it is published and has no PR yet.
+    func canCreatePullRequest(from ref: Ref) -> Bool {
+        hosting.provider != nil && hosting.serverBranch(for: ref) != nil && hosting.pullRequest(for: ref) == nil
+    }
+
+    func createPullRequest(from ref: Ref) {
+        guard let provider = hosting.provider, let branch = hosting.serverBranch(for: ref) else { return }
+        open(provider.newPullRequestURL(source: branch))
     }
 
     // Misc

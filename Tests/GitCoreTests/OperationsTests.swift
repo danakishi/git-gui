@@ -192,6 +192,7 @@ struct OperationsTests {
         #expect(!inv(["remote"]).isMutating)
         #expect(!inv(["remote", "-v"]).isMutating)
         #expect(inv(["remote", "add", "o", "url"]).isMutating)
+        #expect(!inv(["remote", "get-url", "origin"]).isMutating)
         #expect(!inv(["tag", "-l"]).isMutating)
         #expect(inv(["tag", "v1"]).isMutating)
         #expect(inv(["branch", "-D", "x"]).isMutating)

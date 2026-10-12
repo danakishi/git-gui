@@ -59,6 +59,9 @@ struct BranchesPopover: View {
                             .fontWeight(ref.isHead ? .semibold : .regular)
                             .lineLimit(1)
                         Spacer()
+                        if let pr = model.hosting.pullRequest(for: ref) {
+                            PullRequestBadge(pullRequest: pr)
+                        }
                         if let up = ref.upstream {
                             Text(up).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
                         }
@@ -92,6 +95,17 @@ struct BranchesPopover: View {
         Button("New Branch Here…") { model.sheet = .newBranch(from: ref.target) }
         if ref.kind == .localBranch {
             Button("Rename…") { model.sheet = .renameBranch(ref) }
+        }
+        if let provider = model.hosting.provider, ref.kind != .tag {
+            Divider()
+            if let pr = model.hosting.pullRequest(for: ref) {
+                Button("Open PR #\(pr.id)") { model.open(pr.webURL) }
+            } else if model.canCreatePullRequest(from: ref) {
+                Button("Create Pull Request") { model.createPullRequest(from: ref) }
+            }
+            if let branch = model.hosting.serverBranch(for: ref) {
+                Button("Open Branch on \(provider.displayName)") { model.open(provider.webURL(forBranch: branch)) }
+            }
         }
         Divider()
         Button("Copy Name") { model.copyToPasteboard(ref.shortName) }

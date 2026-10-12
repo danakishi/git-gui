@@ -53,8 +53,10 @@ public struct GitInvocation: Sendable, Identifiable {
             // `stash list` and `stash show` only read.
             return !(rest.first == "list" || rest.first == "show")
         case "remote":
-            // `remote` and `remote -v` list; `remote add/remove/...` modify.
-            return rest.contains { !$0.hasPrefix("-") }
+            // `remote`, `remote -v`, `remote get-url`, and `remote show` read;
+            // `remote add/remove/...` modify.
+            guard let sub = rest.first(where: { !$0.hasPrefix("-") }) else { return false }
+            return sub != "get-url" && sub != "show"
         case "branch", "tag":
             // Without positional arguments this is a listing (`branch -a`, `tag -l`).
             return rest.contains { !$0.hasPrefix("-") }

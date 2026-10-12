@@ -1,6 +1,7 @@
 import AppKit
 import GitCore
 import GraphLayout
+import Hosting
 import SwiftUI
 
 /// Commit table built on NSTableView.
@@ -13,6 +14,10 @@ struct CommitTableView: NSViewRepresentable {
     let graphRows: [String: GraphLayout.Row]
     let refsByCommit: [String: [Ref]]
     let headSHA: String?
+    /// PRs by commit sha and CI statuses; `hostingVersion` grows when they change.
+    var pullRequestsByCommit: [String: [PullRequest]] = [:]
+    var ciStatus: [String: CIStatus] = [:]
+    var hostingVersion = 0
     /// 0 means the graph column is hidden.
     let visibleLanes: Int
     @Binding var selection: Commit.ID?
@@ -83,7 +88,8 @@ struct CommitTableView: NSViewRepresentable {
         // Reload only when the set of rows changes, otherwise the table
         // jitters on every state update.
         let signature = DataSignature(count: commits.count, first: commits.first?.id, last: commits.last?.id,
-                                      lanes: visibleLanes, head: headSHA, refs: refsByCommit.count)
+                                      lanes: visibleLanes, head: headSHA, refs: refsByCommit.count,
+                                      hosting: hostingVersion)
         if c.signature != signature {
             c.signature = signature
             c.table.reloadData()
@@ -115,6 +121,7 @@ struct CommitTableView: NSViewRepresentable {
         let lanes: Int
         let head: String?
         let refs: Int
+        let hosting: Int
     }
 
     enum Column: Int, CaseIterable {
@@ -190,7 +197,9 @@ struct CommitTableView: NSViewRepresentable {
             case .message:
                 let cell = tableView.makeView(withIdentifier: column.id, owner: nil) as? MessageCellView
                     ?? { let v = MessageCellView(); v.identifier = column.id; return v }()
-                cell.configure(commit: commit, refs: parent.refsByCommit[commit.id] ?? [])
+                cell.configure(commit: commit, refs: parent.refsByCommit[commit.id] ?? [],
+                               pullRequests: parent.pullRequestsByCommit[commit.id] ?? [],
+                               ci: parent.ciStatus[commit.id])
                 return cell
 
             case .author, .date, .sha:
@@ -362,15 +371,18 @@ final class MessageCellView: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(commit: Commit, refs: [Ref]) {
+    func configure(commit: Commit, refs: [Ref], pullRequests: [PullRequest], ci: CIStatus?) {
         hosting.rootView = AnyView(
             HStack(spacing: 4) {
                 RefBadges(refs: refs)
+                ForEach(pullRequests) { PullRequestBadge(pullRequest: $0) }
                 Text(commit.subject)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(commit.isMerge ? .secondary : .primary)
                 Spacer(minLength: 0)
+                // On the right so the text doesn't shift: the icons line up in an even column.
+                if let ci { CIStatusIcon(status: ci) }
             }
             .font(.system(size: 12))
         )
