@@ -4,10 +4,11 @@ import SwiftUI
 struct ContentView: View {
     @Environment(RepositoryStore.self) private var store
     @Environment(\.openSettings) private var openSettings
+    @State private var columns: NavigationSplitViewVisibility = DebugScreenshot.hideSidebar ? .detailOnly : .automatic
 
     var body: some View {
         @Bindable var store = store
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
             SidebarView()
         } detail: {
             if let entry = store.selected {

@@ -71,6 +71,12 @@ enum DebugScreenshot {
             .flatMap { Int($0.dropFirst("--settings=".count)) }
     }
 
+    /// `--hide-sidebar`: start with the sidebar collapsed. The window snapshot cannot
+    /// draw the sidebar's glass background, so screenshots look better without it.
+    nonisolated static var hideSidebar: Bool {
+        ProcessInfo.processInfo.arguments.contains("--hide-sidebar")
+    }
+
     /// `--branches`: open the branches popover.
     nonisolated static var showBranches: Bool {
         ProcessInfo.processInfo.arguments.contains("--branches")
