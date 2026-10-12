@@ -57,6 +57,9 @@ public struct GitInvocation: Sendable, Identifiable {
             // `remote add/remove/...` modify.
             guard let sub = rest.first(where: { !$0.hasPrefix("-") }) else { return false }
             return sub != "get-url" && sub != "show"
+        case "submodule", "worktree":
+            // `submodule status` and `worktree list` only read.
+            return !(rest.first == "status" || rest.first == "list")
         case "branch", "tag":
             // Without positional arguments this is a listing (`branch -a`, `tag -l`).
             return rest.contains { !$0.hasPrefix("-") }
@@ -68,6 +71,7 @@ public struct GitInvocation: Sendable, Identifiable {
     static let mutatingCommands: Set<String> = [
         "add", "rm", "restore", "reset", "apply", "commit", "checkout", "switch", "branch", "tag",
         "fetch", "pull", "push", "merge", "mergetool", "rebase", "cherry-pick", "revert", "stash", "clean", "remote",
+        "submodule", "worktree",
     ]
 }
 

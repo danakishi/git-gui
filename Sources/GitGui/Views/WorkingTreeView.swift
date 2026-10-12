@@ -152,6 +152,13 @@ struct WorkingTreeView: View {
         HStack(spacing: 6) {
             FileStatusBadge(status: file.status)
             Text(file.entry.path).lineLimit(1)
+            if let sub = file.entry.submodule, !file.staged {
+                Label(submoduleSummary(sub), systemImage: "shippingbox")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help("Submodule. Changes inside it are committed in the submodule itself; only its commit is tracked here.")
+            }
             if file.entry.isConflict {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     .help("Conflict")
@@ -191,14 +198,16 @@ struct WorkingTreeView: View {
         if !staged.isEmpty {
             Button("Unstage") { Task { await model.unstage(staged) } }
         }
-        if !unstaged.isEmpty {
+        // `restore` does not touch a submodule's contents, so a discard would look like a no-op.
+        let discardable = unstaged.filter { $0.entry.submodule == nil }
+        if !discardable.isEmpty {
             Divider()
-            Button("Discard Changes…", role: .destructive) { discardCandidates = unstaged }
+            Button("Discard Changes…", role: .destructive) { discardCandidates = discardable }
         }
         Divider()
         if files.count == 1 {
             let file = files[0]
-            if !file.entry.isConflict, file.entry.index != .untracked {
+            if !file.entry.isConflict, file.entry.index != .untracked, file.entry.submodule == nil {
                 Button("Open in External Diff Tool") { Task { await model.externalDiff(file) } }
             }
             if file.status != .deleted {
@@ -207,6 +216,14 @@ struct WorkingTreeView: View {
             Button("Show in Finder") { model.revealInFinder(file.entry.path) }
         }
         Button("Copy Path") { model.copyToPasteboard(files.map(\.entry.path).joined(separator: "\n")) }
+    }
+
+    private func submoduleSummary(_ sub: StatusEntry.Submodule) -> String {
+        var parts: [String] = []
+        if sub.commitChanged { parts.append("new commit") }
+        if sub.hasModifications { parts.append("changes inside") }
+        if sub.hasUntracked { parts.append("untracked inside") }
+        return parts.joined(separator: ", ")
     }
 
     private func toggleStage(_ files: [WorkingFile]) {
@@ -261,7 +278,8 @@ struct WorkingTreeView: View {
 
     private func hunkActions(for file: WorkingFile, diff: FileDiff) -> HunkActions? {
         // An untracked file can only be staged as a whole: it is not in the index yet.
-        guard file.entry.index != .untracked, diff.hunks.count > 0 else { return nil }
+        // For a submodule or an LFS file, the hunk is bookkeeping text rather than lines of the file.
+        guard file.entry.index != .untracked, diff.hunks.count > 0, diff.special == nil else { return nil }
         if file.staged {
             return HunkActions(primaryTitle: "Unstage", primaryIcon: "minus.circle",
                                primary: { h in Task { await model.unstageHunk(h, of: diff) } }, discard: nil)

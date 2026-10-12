@@ -71,6 +71,11 @@ enum DebugScreenshot {
             .flatMap { Int($0.dropFirst("--settings=".count)) }
     }
 
+    /// `--branches`: open the branches popover.
+    nonisolated static var showBranches: Bool {
+        ProcessInfo.processInfo.arguments.contains("--branches")
+    }
+
     /// `--working-tree`: show the working tree panel.
     nonisolated static var showWorkingTree: Bool {
         ProcessInfo.processInfo.arguments.contains("--working-tree")
@@ -110,8 +115,12 @@ enum DebugScreenshot {
 
     @MainActor
     private static func visibleWindow() -> NSWindow? {
-        // The topmost window (Settings, if open), and if it has a sheet, the sheet.
-        // NSApp appears after App.init, so the first check is deferred.
+        // The open popover (branches, stash), otherwise the topmost window (Settings, if
+        // open), and if it has a sheet, the sheet. NSApp appears after App.init,
+        // so the first check is deferred.
+        if let popover = NSApp?.windows.first(where: { $0.isVisible && "\(type(of: $0))".contains("Popover") }) {
+            return popover
+        }
         let window = (NSApp?.orderedWindows ?? []).first { $0.isVisible && !$0.isMiniaturized && $0.contentView != nil }
         return window?.attachedSheet ?? window
     }

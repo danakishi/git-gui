@@ -43,14 +43,18 @@ public struct Ref: Identifiable, Hashable, Sendable {
     public let isHead: Bool
     /// The upstream of a local branch, for example `origin/main`.
     public let upstream: String?
+    /// The worktree directory where the branch is currently checked out; for the current branch, this same directory.
+    public let worktreePath: String?
 
-    public init(id: String, kind: Kind, shortName: String, target: String, isHead: Bool, upstream: String?) {
+    public init(id: String, kind: Kind, shortName: String, target: String, isHead: Bool, upstream: String?,
+                worktreePath: String? = nil) {
         self.id = id
         self.kind = kind
         self.shortName = shortName
         self.target = target
         self.isHead = isHead
         self.upstream = upstream
+        self.worktreePath = worktreePath
     }
 }
 
@@ -84,6 +88,22 @@ public struct StatusEntry: Identifiable, Hashable, Sendable {
         case ignored = "!"
     }
 
+    /// What changed in a submodule: `git status` distinguishes three things.
+    public struct Submodule: Hashable, Sendable {
+        /// A different commit is checked out than the one recorded in the parent.
+        public let commitChanged: Bool
+        /// Tracked files inside have been modified.
+        public let hasModifications: Bool
+        /// There are untracked files inside.
+        public let hasUntracked: Bool
+
+        public init(commitChanged: Bool, hasModifications: Bool, hasUntracked: Bool) {
+            self.commitChanged = commitChanged
+            self.hasModifications = hasModifications
+            self.hasUntracked = hasUntracked
+        }
+    }
+
     public var id: String { path }
     public let path: String
     /// The old path when renamed.
@@ -91,16 +111,20 @@ public struct StatusEntry: Identifiable, Hashable, Sendable {
     public let index: Change
     public let worktree: Change
     public let isConflict: Bool
+    /// Non-`nil` if this is a submodule.
+    public let submodule: Submodule?
 
     public var isStaged: Bool { index != .unmodified && index != .untracked && index != .ignored }
     public var isUnstaged: Bool { worktree != .unmodified }
 
-    public init(path: String, originalPath: String? = nil, index: Change, worktree: Change, isConflict: Bool = false) {
+    public init(path: String, originalPath: String? = nil, index: Change, worktree: Change, isConflict: Bool = false,
+                submodule: Submodule? = nil) {
         self.path = path
         self.originalPath = originalPath
         self.index = index
         self.worktree = worktree
         self.isConflict = isConflict
+        self.submodule = submodule
     }
 }
 

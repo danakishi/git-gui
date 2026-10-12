@@ -17,7 +17,9 @@ struct DiffView: View {
     var hunkActions: HunkActions?
 
     var body: some View {
-        if file.isBinary {
+        if let special = file.special {
+            SpecialDiffView(special: special)
+        } else if file.isBinary {
             ContentUnavailableView("Binary File", systemImage: "doc.zipper")
         } else if file.hunks.isEmpty {
             ContentUnavailableView(emptyTitle, systemImage: "doc")
@@ -48,6 +50,59 @@ struct DiffView: View {
         case .copied: "Copied without changes"
         default: "No changes"
         }
+    }
+}
+
+/// A submodule or LFS file: instead of service lines, what actually changed.
+private struct SpecialDiffView: View {
+    let special: FileDiff.Special
+
+    var body: some View {
+        switch special {
+        case .submodule(let old, let new, let dirty):
+            card(title: "Submodule", icon: "shippingbox",
+                 note: dirty ? "It has uncommitted changes inside: they are committed in the submodule itself."
+                     : old == new ? "Same commit." : nil,
+                 warning: dirty) {
+                row("Before", old.map { String($0.prefix(10)) } ?? "—")
+                row("After", new.map { String($0.prefix(10)) } ?? "—")
+            }
+        case .lfs(let old, let new):
+            card(title: "File in Git LFS", icon: "externaldrive",
+                 note: "Git stores only a pointer; the content is on the LFS server.") {
+                row("Before", old.map(describe) ?? "—")
+                row("After", new.map(describe) ?? "—")
+            }
+        }
+    }
+
+    private func describe(_ p: LFSPointer) -> String {
+        let oid = p.oid.split(separator: ":").last.map { String($0.prefix(12)) } ?? p.oid
+        return "\(ByteCountFormatter.string(fromByteCount: Int64(p.size), countStyle: .file)) · \(oid)"
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label).foregroundStyle(.secondary)
+            Text(value).monospaced().textSelection(.enabled)
+        }
+    }
+
+    private func card(title: String, icon: String, note: String?, warning: Bool = false,
+                      @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: icon).font(.headline)
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                content()
+            }
+            .font(.callout)
+            if let note {
+                Text(note).font(.callout).foregroundStyle(warning ? Color.orange : Color.secondary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .textBackgroundColor))
     }
 }
 

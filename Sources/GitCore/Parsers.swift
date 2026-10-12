@@ -33,19 +33,20 @@ public enum GitParsers {
     // MARK: git for-each-ref
 
     /// `%(*objectname)` is the peeled commit for annotated tags, otherwise empty.
-    /// `%(HEAD)` is `*` for the current branch.
-    public static let refFormat = "%(refname)%00%(objectname)%00%(*objectname)%00%(upstream:short)%00%(HEAD)"
+    /// `%(HEAD)` is `*` for the current branch, `%(worktreepath)` is where the branch is checked out (in this or another worktree).
+    public static let refFormat = "%(refname)%00%(objectname)%00%(*objectname)%00%(upstream:short)%00%(HEAD)%00%(worktreepath)"
 
     public static func parseRefs(_ text: String) -> [Ref] {
         var result: [Ref] = []
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let f = line.split(separator: fieldSeparator, maxSplits: 4, omittingEmptySubsequences: false)
-            guard f.count == 5 else { continue }
+            let f = line.split(separator: fieldSeparator, maxSplits: 5, omittingEmptySubsequences: false)
+            guard f.count >= 5 else { continue }
             let name = String(f[0])
             let peeled = String(f[2])
             let target = peeled.isEmpty ? String(f[1]) : peeled
             let upstream = f[3].isEmpty ? nil : String(f[3])
             let isHead = f[4] == "*"
+            let worktree = f.count > 5 && !f[5].isEmpty ? String(f[5]) : nil
 
             let kind: Ref.Kind
             let short: String
@@ -67,7 +68,8 @@ public enum GitParsers {
                 kind = .other
                 short = name
             }
-            result.append(Ref(id: name, kind: kind, shortName: short, target: target, isHead: isHead, upstream: upstream))
+            result.append(Ref(id: name, kind: kind, shortName: short, target: target, isHead: isHead,
+                              upstream: upstream, worktreePath: worktree))
         }
         return result
     }
@@ -103,7 +105,8 @@ public enum GitParsers {
                 guard parts.count == 9 else { continue }
                 entries.append(StatusEntry(
                     path: String(parts[8]),
-                    index: change(parts[1].first), worktree: change(parts[1].last)
+                    index: change(parts[1].first), worktree: change(parts[1].last),
+                    submodule: submodule(parts[2])
                 ))
             case "2":
                 // 2 XY sub mH mI mW hH hI Xscore path\torigPath
@@ -113,7 +116,8 @@ public enum GitParsers {
                 entries.append(StatusEntry(
                     path: String(paths[0]),
                     originalPath: paths.count > 1 ? String(paths[1]) : nil,
-                    index: change(parts[1].first), worktree: change(parts[1].last)
+                    index: change(parts[1].first), worktree: change(parts[1].last),
+                    submodule: submodule(parts[2])
                 ))
             case "u":
                 // u XY sub m1 m2 m3 mW h1 h2 h3 path
@@ -152,6 +156,13 @@ public enum GitParsers {
                                      date: Date(timeIntervalSince1970: at), message: String(f[3])))
         }
         return result
+    }
+
+    /// The `sub` field: `N...` for a regular file, `S<c><m><u>` for a submodule.
+    private static func submodule(_ field: Substring) -> StatusEntry.Submodule? {
+        let c = Array(field)
+        guard c.count == 4, c[0] == "S" else { return nil }
+        return StatusEntry.Submodule(commitChanged: c[1] == "C", hasModifications: c[2] == "M", hasUntracked: c[3] == "U")
     }
 
     private static func change(_ c: Character?) -> StatusEntry.Change {

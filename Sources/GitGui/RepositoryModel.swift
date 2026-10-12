@@ -30,6 +30,9 @@ final class RepositoryModel {
     private(set) var head: Head?
     private(set) var status: WorkingTreeStatus?
     private(set) var stashes: [StashEntry] = []
+    private(set) var submodules: [Submodule] = []
+    /// All worktrees of the repository, including this one; a regular repository has just one.
+    private(set) var worktrees: [Worktree] = []
     /// An unfinished merge/rebase/cherry-pick/revert.
     private(set) var operation: OperationState?
     /// What "Undo" will do.
@@ -145,7 +148,8 @@ final class RepositoryModel {
 
     func start() async {
         if watcher == nil {
-            watcher = RepositoryWatcher(url: repo.workingDirectory) { [weak self] in
+            let gitDirs = (try? await repo.gitDirectories()) ?? []
+            watcher = RepositoryWatcher(urls: [repo.workingDirectory], gitDirectories: gitDirs) { [weak self] in
                 Task { @MainActor in await self?.reloadFromWatcher() }
             }
         }
@@ -158,6 +162,9 @@ final class RepositoryModel {
         }
         if DebugScreenshot.showWorkingTree {
             inspector = .workingTree
+        }
+        if DebugScreenshot.showBranches {
+            showBranches = true
         }
         if let path = DebugScreenshot.conflictPath {
             sheet = .conflict(path: path)
@@ -192,9 +199,13 @@ final class RepositoryModel {
             async let st = repo.stashList()
             async let op = repo.operationState()
             async let u = repo.undoAction()
+            async let sub = repo.submodules()
+            async let wt = repo.worktrees()
             let (commits, refs, head, status, stashes) = try await (c, r, h, s, st)
             self.operation = try await op
             self.undoAction = try? await u
+            self.submodules = (try? await sub) ?? []
+            self.worktrees = (try? await wt) ?? []
             self.commits = commits
             self.refs = refs
             self.head = head
@@ -735,6 +746,25 @@ final class RepositoryModel {
             ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")?.path
         guard let terminal else { return }
         Preferences.open([repo.workingDirectory], appPath: terminal)
+    }
+
+    /// A worktree other than this one.
+    var otherWorktrees: [Worktree] {
+        worktrees.filter { $0.path != repo.workingDirectory.path }
+    }
+
+    /// The branch is checked out in another worktree: git won't let you switch to it here.
+    func isInOtherWorktree(_ ref: Ref) -> Bool {
+        guard let path = ref.worktreePath else { return false }
+        return path != repo.workingDirectory.path
+    }
+
+    func updateSubmodules() async {
+        await perform("Updating submodules") { try await repo.updateSubmodules() }
+    }
+
+    func pruneWorktrees() async {
+        await perform("Pruning stale worktrees") { try await repo.pruneWorktrees() }
     }
 
     func revealInFinder(_ path: String) {

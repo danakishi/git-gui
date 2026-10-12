@@ -267,7 +267,7 @@ struct RefBadges: View {
         .background(color(for: ref).opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(color(for: ref).opacity(0.5), lineWidth: 0.5))
         .foregroundStyle(color(for: ref))
-        .help(ref.shortName)
+        .help(ref.worktreePath.map { ref.isHead ? ref.shortName : "\(ref.shortName) — checked out in worktree \($0)" } ?? ref.shortName)
     }
 
     /// Long names such as `origin/feature/sc-15205/cost-item-name-validation`
@@ -296,7 +296,7 @@ struct RefBadges: View {
 
     private func icon(for ref: Ref) -> String {
         switch ref.kind {
-        case .localBranch: ref.isHead ? "checkmark" : "arrow.triangle.branch"
+        case .localBranch: ref.isHead ? "checkmark" : ref.worktreePath != nil ? "square.on.square" : "arrow.triangle.branch"
         case .remoteBranch: "cloud"
         case .tag: "tag"
         case .stash: "tray"
