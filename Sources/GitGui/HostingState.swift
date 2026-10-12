@@ -29,6 +29,8 @@ final class HostingState {
 
     /// How many of the most recent history commits to query in addition to branches.
     static let recentCommits = 30
+    /// No more commits are queried per refresh; the rest wait for the next one.
+    static let maxCommits = 100
 
     var displayName: String? { provider?.displayName }
 
@@ -113,7 +115,7 @@ final class HostingState {
         let name = remotes.first { $0 == "origin" } ?? remotes.first
         let info: RemoteInfo?
         if let name, let url = try? await repo.remoteURL(name) {
-            info = RemoteInfo.parse(remoteURL: url)
+            info = RemoteInfo.parse(remoteURL: url, gitlabHosts: Set(Accounts.shared.gitlabHosts))
         } else {
             info = nil
         }
@@ -123,18 +125,23 @@ final class HostingState {
             setProvider(nil, reason: nil)
             return
         }
+        let account: HostingAccount
         switch info.kind {
-        case .github:
-            if let token = await Accounts.shared.gitHubToken() {
-                // The provider is stateless and cheap to recreate; this is how a new token gets picked up.
-                setProvider(GitHubProvider(remote: info, token: token), reason: nil)
-            } else {
-                setProvider(nil, reason: "No GitHub token: run `gh auth login` or add a token in Settings (⌘,)")
-            }
-        case .gitlab:
-            setProvider(nil, reason: "GitLab is not supported yet")
+        case .github: account = .github
+        case .gitlab: account = .gitlab(host: info.host)
         case .unknown:
             setProvider(nil, reason: nil)
+            return
+        }
+        guard let token = await Accounts.shared.token(for: account) else {
+            let login = account == .github ? "gh auth login" : "glab auth login --hostname \(info.host)"
+            setProvider(nil, reason: "No token for \(info.host): run `\(login)` or add a token in Settings (⌘,)")
+            return
+        }
+        // The provider is stateless and cheap to recreate; this is how a new token gets picked up.
+        switch account {
+        case .github: setProvider(GitHubProvider(remote: info, token: token), reason: nil)
+        case .gitlab: setProvider(GitLabProvider(remote: info, token: token), reason: nil)
         }
     }
 
@@ -159,6 +166,6 @@ final class HostingState {
         if let remote = remoteName {
             refs.filter { $0.kind == .remoteBranch && $0.shortName.hasPrefix(remote + "/") }.forEach { add($0.target) }
         }
-        return Array(result.prefix(GitHubProvider.maxCommitsPerQuery))
+        return Array(result.prefix(Self.maxCommits))
     }
 }

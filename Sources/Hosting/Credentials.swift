@@ -54,20 +54,43 @@ public enum Keychain {
 /// We don't copy it into the Keychain: `gh` stores the token in its own entry
 /// and refreshes it, and we pick up the fresh one on every app launch.
 public enum GitHubCLI {
-    /// Where to look for `gh`: an app launched from Finder gets a trimmed-down PATH.
-    static let candidates = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
-
     public static var executable: String? {
-        let path = ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":").map { "\($0)/gh" } ?? []
-        return (candidates + path).first { FileManager.default.isExecutableFile(atPath: $0) }
+        CommandLineTool.find("gh")
     }
 
     public static func token(host: String = "github.com") async -> String? {
         guard let gh = executable else { return nil }
-        return await Task.detached {
+        return await CommandLineTool.output(gh, ["auth", "token", "--hostname", host])
+    }
+}
+
+/// The token from `glab` (GitLab CLI) for a specific server.
+public enum GitLabCLI {
+    public static var executable: String? {
+        CommandLineTool.find("glab")
+    }
+
+    public static func token(host: String) async -> String? {
+        guard let glab = executable else { return nil }
+        return await CommandLineTool.output(glab, ["config", "get", "token", "--host", host])
+    }
+}
+
+/// Running CLI utilities (`gh`, `glab`) outside the terminal.
+enum CommandLineTool {
+    /// An app launched from Finder gets a trimmed-down PATH, so look in Homebrew first.
+    static func find(_ name: String) -> String? {
+        let fixed = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+        let path = ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+        return (fixed + path).map { "\($0)/\(name)" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Stdout trimmed of surrounding whitespace; `nil` if the command failed or printed nothing.
+    static func output(_ executable: String, _ arguments: [String]) async -> String? {
+        await Task.detached {
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: gh)
-            process.arguments = ["auth", "token", "--hostname", host]
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
             let out = Pipe()
             process.standardOutput = out
             process.standardError = FileHandle.nullDevice
@@ -76,8 +99,8 @@ public enum GitHubCLI {
             let data = out.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             guard process.terminationStatus == 0 else { return nil }
-            let token = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            return token.isEmpty ? nil : token
+            let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
         }.value
     }
 }

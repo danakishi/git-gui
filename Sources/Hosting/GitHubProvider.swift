@@ -4,9 +4,7 @@ import Foundation
 /// costing one point of the rate limit, however many commits we ask about.
 public struct GitHubProvider: HostingProvider {
     public let remote: RemoteInfo
-    private let token: String
-    private let endpoint: URL
-    private let transport: HTTPTransport
+    private let client: GraphQLClient
 
     /// We don't ask about more commits in one request; the rest wait for the next one.
     public static let maxCommitsPerQuery = 100
@@ -18,16 +16,16 @@ public struct GitHubProvider: HostingProvider {
         transport: @escaping HTTPTransport = HTTP.urlSession
     ) {
         self.remote = remote
-        self.token = token
-        self.endpoint = endpoint
-        self.transport = transport
+        self.client = GraphQLClient(service: "GitHub", endpoint: endpoint, token: token, transport: transport)
     }
 
     public var displayName: String { "GitHub" }
+    public var pullRequestName: String { "pull request" }
+    public var pullRequestShortName: String { "PR" }
 
     public func snapshot(commits: [String]) async throws -> HostingSnapshot {
         let shas = Array(commits.filter(Self.isSHA).prefix(Self.maxCommitsPerQuery))
-        let data: SnapshotData = try await query(Self.snapshotQuery(commitCount: shas.count), variables: Self.variables(remote, shas))
+        let data: SnapshotData = try await client.query(Self.snapshotQuery(commitCount: shas.count), variables: Self.variables(remote, shas))
         guard let repo = data.repository else {
             throw HostingError("Repository \(remote.fullName) was not found on GitHub, or access is denied")
         }
@@ -40,7 +38,7 @@ public struct GitHubProvider: HostingProvider {
             let headCI = node.commits.nodes.first?.commit.statusCheckRollup?.status
             if let headCI { ci[node.headRefOid] = headCI }
             return PullRequest(
-                id: node.number, title: node.title,
+                id: node.number, reference: "#\(node.number)", title: node.title,
                 sourceBranch: node.headRefName, targetBranch: node.baseRefName,
                 headSHA: node.headRefOid, author: node.author?.login ?? "",
                 webURL: url, isDraft: node.isDraft, isCrossRepository: node.isCrossRepository,
@@ -54,7 +52,7 @@ public struct GitHubProvider: HostingProvider {
     public static func viewerLogin(token: String, transport: @escaping HTTPTransport = HTTP.urlSession) async throws -> String {
         let probe = GitHubProvider(remote: RemoteInfo(kind: .github, host: "github.com", owner: "", repo: ""),
                                    token: token, transport: transport)
-        let data: ViewerData = try await probe.query("query { viewer { login } }", variables: [:])
+        let data: ViewerData = try await probe.client.query("query { viewer { login } }", variables: [:])
         return data.viewer.login
     }
 
@@ -105,69 +103,9 @@ public struct GitHubProvider: HostingProvider {
     static func isSHA(_ s: String) -> Bool {
         s.count == 40 && s.allSatisfy(\.isHexDigit)
     }
-
-    private func query<T: Decodable>(_ query: String, variables: [String: String]) async throws -> T {
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("GitGui", forHTTPHeaderField: "User-Agent")
-        request.httpBody = try JSONEncoder().encode(GraphQLRequest(query: query, variables: variables))
-        request.timeoutInterval = 30
-
-        let (body, response) = try await transport(request)
-        switch response.statusCode {
-        case 200: break
-        case 401:
-            throw HostingError("GitHub rejected the token: it is invalid or has been revoked")
-        case 403, 429:
-            throw HostingError(Self.rateLimitMessage(response) ?? "GitHub denied access (\(response.statusCode))")
-        default:
-            throw HostingError("GitHub responded with \(response.statusCode)")
-        }
-
-        let decoded: GraphQLResponse<T>
-        do {
-            decoded = try JSONDecoder().decode(GraphQLResponse<T>.self, from: body)
-        } catch {
-            throw HostingError("Could not parse the GitHub response: \(error)")
-        }
-        // If there is no data at all, show the error. Partial errors (for example,
-        // NOT_FOUND for a single object) don't affect the rest of the response.
-        if let data = decoded.data { return data }
-        let messages = (decoded.errors ?? []).map(\.message)
-        if decoded.errors?.contains(where: { $0.type == "RATE_LIMITED" }) == true {
-            throw HostingError("GitHub API rate limit exceeded")
-        }
-        throw HostingError("GitHub error: " + (messages.isEmpty ? "empty response" : messages.joined(separator: "; ")))
-    }
-
-    private static func rateLimitMessage(_ response: HTTPURLResponse) -> String? {
-        guard response.value(forHTTPHeaderField: "x-ratelimit-remaining") == "0" else { return nil }
-        if let reset = response.value(forHTTPHeaderField: "x-ratelimit-reset").flatMap(TimeInterval.init) {
-            let time = Date(timeIntervalSince1970: reset).formatted(date: .omitted, time: .shortened)
-            return "GitHub API rate limit exceeded until \(time)"
-        }
-        return "GitHub API rate limit exceeded"
-    }
 }
 
 // MARK: Response models
-
-private struct GraphQLRequest: Encodable {
-    let query: String
-    let variables: [String: String]
-}
-
-private struct GraphQLResponse<T: Decodable>: Decodable {
-    let data: T?
-    let errors: [GraphQLError]?
-}
-
-private struct GraphQLError: Decodable {
-    let message: String
-    let type: String?
-}
 
 private struct ViewerData: Decodable {
     struct Viewer: Decodable { let login: String }
@@ -223,18 +161,11 @@ private struct RepositoryNode: Decodable {
     let pullRequests: PullRequests
     let commits: [(String, CIStatus)]
 
-    private struct Key: CodingKey {
-        var stringValue: String
-        var intValue: Int? { nil }
-        init(stringValue: String) { self.stringValue = stringValue }
-        init?(intValue: Int) { nil }
-    }
-
     init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: Key.self)
-        pullRequests = try c.decode(PullRequests.self, forKey: Key(stringValue: "pullRequests"))
+        let c = try decoder.container(keyedBy: DynamicKey.self)
+        pullRequests = try c.decode(PullRequests.self, forKey: DynamicKey(stringValue: "pullRequests"))
         var commits: [(String, CIStatus)] = []
-        for key in c.allKeys where key.stringValue.hasPrefix("c") && key.stringValue.dropFirst().allSatisfy(\.isNumber) {
+        for key in c.allKeys where key.isCommitAlias {
             // If the commit isn't on the server, it's null; if it isn't a commit (a tree, blob), it's an empty object.
             guard let node = (try? c.decodeIfPresent(CommitNode.self, forKey: key)) ?? nil,
                   let status = node.statusCheckRollup?.status else { continue }

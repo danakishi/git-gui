@@ -83,14 +83,14 @@ struct CommitListView: View {
         if let provider = model.hosting.provider {
             menu.addItem(.separator())
             for pr in model.hosting.pullRequestsByCommit[commit.id] ?? [] {
-                menu.addItem(ClosureMenuItem("Open PR #\(pr.id)") { model.open(pr.webURL) })
+                menu.addItem(ClosureMenuItem("Open \(provider.pullRequestShortName) \(pr.reference)") { model.open(pr.webURL) })
             }
             // A local branch and its upstream often point at the same commit: one item per remote branch.
             var offered = Set<String>()
             for ref in refs where ref.kind == .localBranch || ref.kind == .remoteBranch {
                 if model.canCreatePullRequest(from: ref), let branch = model.hosting.serverBranch(for: ref),
                    offered.insert(branch).inserted {
-                    menu.addItem(ClosureMenuItem("Create Pull Request from \(ref.shortName)") {
+                    menu.addItem(ClosureMenuItem("Create \(provider.pullRequestName) from \(ref.shortName)") {
                         model.createPullRequest(from: ref)
                     })
                 }

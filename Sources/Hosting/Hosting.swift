@@ -4,6 +4,10 @@ import Foundation
 public protocol HostingProvider: Sendable {
     var remote: RemoteInfo { get }
     var displayName: String { get }
+    /// "pull request" or "merge request", for menus.
+    var pullRequestName: String { get }
+    /// "PR" or "MR".
+    var pullRequestShortName: String { get }
 
     /// Open PRs/MRs and CI statuses for the given commits, in a single pass:
     /// the provider decides how to fit into the fewest requests.
@@ -30,8 +34,10 @@ public struct HostingSnapshot: Sendable {
 }
 
 public struct PullRequest: Identifiable, Hashable, Sendable {
-    /// The PR number (`#123`) or MR number (`!123`).
+    /// The PR or MR number.
     public let id: Int
+    /// How the number is written on the hosting provider: `#123` on GitHub, `!123` on GitLab.
+    public let reference: String
     public let title: String
     public let sourceBranch: String
     public let targetBranch: String
@@ -45,9 +51,10 @@ public struct PullRequest: Identifiable, Hashable, Sendable {
     /// CI for the latest commit.
     public let ciStatus: CIStatus?
 
-    public init(id: Int, title: String, sourceBranch: String, targetBranch: String, headSHA: String,
+    public init(id: Int, reference: String, title: String, sourceBranch: String, targetBranch: String, headSHA: String,
                 author: String, webURL: URL, isDraft: Bool, isCrossRepository: Bool, ciStatus: CIStatus?) {
         self.id = id
+        self.reference = reference
         self.title = title
         self.sourceBranch = sourceBranch
         self.targetBranch = targetBranch
@@ -115,7 +122,8 @@ public struct RemoteInfo: Sendable, Hashable {
 
     /// Parses `https://host/owner/repo.git`, `ssh://git@host:port/owner/repo.git`
     /// and `git@host:owner/repo.git`.
-    public static func parse(remoteURL: String) -> RemoteInfo? {
+    /// - Parameter gitlabHosts: self-hosted GitLab hosts whose names don't contain "gitlab".
+    public static func parse(remoteURL: String, gitlabHosts: Set<String> = []) -> RemoteInfo? {
         var s = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.hasSuffix("/") { s.removeLast() }
         if s.hasSuffix(".git") { s.removeLast(4) }
@@ -144,7 +152,7 @@ public struct RemoteInfo: Sendable, Hashable {
         guard !host.isEmpty, parts.count >= 2, let repo = parts.last else { return nil }
         let owner = parts.dropLast().joined(separator: "/")
         let kind: RemoteKind = host == "github.com" ? .github
-            : host.contains("gitlab") ? .gitlab : .unknown
+            : host.contains("gitlab") || gitlabHosts.contains(host) ? .gitlab : .unknown
         return RemoteInfo(kind: kind, host: host, owner: owner, repo: repo)
     }
 }

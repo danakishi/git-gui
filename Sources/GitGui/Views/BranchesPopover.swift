@@ -99,9 +99,9 @@ struct BranchesPopover: View {
         if let provider = model.hosting.provider, ref.kind != .tag {
             Divider()
             if let pr = model.hosting.pullRequest(for: ref) {
-                Button("Open PR #\(pr.id)") { model.open(pr.webURL) }
+                Button("Open \(provider.pullRequestShortName) \(pr.reference)") { model.open(pr.webURL) }
             } else if model.canCreatePullRequest(from: ref) {
-                Button("Create Pull Request") { model.createPullRequest(from: ref) }
+                Button("Create \(provider.pullRequestName)") { model.createPullRequest(from: ref) }
             }
             if let branch = model.hosting.serverBranch(for: ref) {
                 Button("Open Branch on \(provider.displayName)") { model.open(provider.webURL(forBranch: branch)) }

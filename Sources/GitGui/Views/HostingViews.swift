@@ -54,7 +54,7 @@ struct PullRequestBadge: View {
         HStack(spacing: 2) {
             Image(systemName: "arrow.triangle.pull")
                 .font(.system(size: 8))
-            Text("#\(pullRequest.id)")
+            Text(pullRequest.reference)
         }
         .font(.system(size: 10, weight: .semibold))
         .padding(.horizontal, 5)
@@ -67,7 +67,7 @@ struct PullRequestBadge: View {
     }
 
     private var help: String {
-        var lines = ["#\(pullRequest.id) \(pullRequest.title)",
+        var lines = ["\(pullRequest.reference) \(pullRequest.title)",
                      "\(pullRequest.sourceBranch) → \(pullRequest.targetBranch)"]
         if pullRequest.isDraft { lines.append("Draft") }
         if let ci = pullRequest.ciStatus { lines.append(ci.title) }
@@ -81,7 +81,7 @@ struct HostingStatusView: View {
 
     var body: some View {
         let hosting = model.hosting
-        if let name = hosting.displayName {
+        if let name = hosting.displayName, let term = hosting.provider?.pullRequestShortName {
             Button {
                 Task { await model.refreshHosting() }
             } label: {
@@ -93,7 +93,7 @@ struct HostingStatusView: View {
                     } else {
                         Image(systemName: "arrow.triangle.pull")
                     }
-                    Text(hosting.error == nil ? "\(name) · \(hosting.pullRequests.count) PR" : "\(name): error")
+                    Text(hosting.error == nil ? "\(name) · \(hosting.pullRequests.count) \(term)" : "\(name): error")
                 }
             }
             .buttonStyle(.borderless)
@@ -116,7 +116,7 @@ struct HostingStatusView: View {
         if let date = hosting.lastUpdated {
             lines.append("\(name): updated at \(date.formatted(date: .omitted, time: .standard))")
         }
-        lines.append("Click to refresh PRs and CI statuses")
+        lines.append("Click to refresh \(model.hosting.provider?.pullRequestShortName ?? "PR") and CI statuses")
         return lines.joined(separator: "\n")
     }
 }

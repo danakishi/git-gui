@@ -117,8 +117,8 @@ struct CommitDetailView: View {
         }
         ForEach(hosting.pullRequestsByCommit[commit.id] ?? []) { pr in
             GridRow {
-                Text("PR").foregroundStyle(.secondary)
-                Button("#\(pr.id) \(pr.title)") { model.open(pr.webURL) }
+                Text(hosting.provider?.pullRequestShortName ?? "PR").foregroundStyle(.secondary)
+                Button("\(pr.reference) \(pr.title)") { model.open(pr.webURL) }
                     .buttonStyle(.link)
                     .lineLimit(1)
                     .help("\(pr.sourceBranch) → \(pr.targetBranch), by \(pr.author)")
