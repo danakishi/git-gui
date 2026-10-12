@@ -71,6 +71,14 @@ enum DebugScreenshot {
             .flatMap { Int($0.dropFirst("--settings=".count)) }
     }
 
+    /// `--light` / `--dark`: force the app's appearance regardless of the system setting.
+    nonisolated static var appearance: NSAppearance.Name? {
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("--light") { return .aqua }
+        if args.contains("--dark") { return .darkAqua }
+        return nil
+    }
+
     /// `--hide-sidebar`: start with the sidebar collapsed. The window snapshot cannot
     /// draw the sidebar's glass background, so screenshots look better without it.
     nonisolated static var hideSidebar: Bool {
@@ -89,6 +97,10 @@ enum DebugScreenshot {
 
     @MainActor
     static func armIfRequested() {
+        if let name = appearance {
+            // NSApp does not exist yet inside App.init.
+            DispatchQueue.main.async { NSApp.appearance = NSAppearance(named: name) }
+        }
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "--screenshot"), i + 1 < args.count else { return }
         let path = args[i + 1]

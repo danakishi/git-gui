@@ -4,7 +4,10 @@ A native Git client for macOS, written in SwiftUI, with a GitKraken-style commit
 It drives the system `git` binary, so your config, SSH keys, credential helpers and hooks
 work exactly as they do in the terminal.
 
-![Commit graph with the details of the selected commit](docs/screenshot.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img alt="Commit graph with the details of the selected commit" src="docs/screenshot-light.png">
+</picture>
 
 ## Features
 
