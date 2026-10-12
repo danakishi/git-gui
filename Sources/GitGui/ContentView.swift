@@ -15,11 +15,15 @@ struct ContentView: View {
                 RepositoryView(model: store.model(for: entry))
                     .id(entry.id)
             } else {
-                ContentUnavailableView(
-                    "No Repository",
-                    systemImage: "folder.badge.plus",
-                    description: Text("Press ⌘O or drag a folder into the sidebar.")
-                )
+                ContentUnavailableView {
+                    Label {
+                        Text("No Repository")
+                    } icon: {
+                        LogoMark().frame(width: 96, height: 96)
+                    }
+                } description: {
+                    Text("Press ⌘O or drag a folder into the sidebar.")
+                }
             }
         }
         .overlay(alignment: .top) {

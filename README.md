@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" width="128" alt="GitGui logo" align="right">
+
 # GitGui
 
 A native Git client for macOS, written in SwiftUI, with a GitKraken-style commit graph.
@@ -68,6 +70,7 @@ scripts/build-app.sh run      # build and launch
 scripts/build-app.sh release  # optimised build
 scripts/build-app.sh release universal  # arm64 + x86_64, as in the releases
 swift test                    # unit tests, many of them against a real git
+swift scripts/make-icon.swift # rebuild Resources/AppIcon.icns from docs/logo.svg
 ```
 
 The app is signed ad hoc, which is enough to run it locally.
