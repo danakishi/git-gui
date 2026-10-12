@@ -50,6 +50,10 @@ struct RepositoryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if model.operation != nil {
+                OperationBanner(model: model)
+                Divider()
+            }
             WorkingTreeBar(model: model)
             Divider()
             CommitListView(model: model)
@@ -87,7 +91,22 @@ struct RepositoryView: View {
             Task { await model.refreshHosting() }
         }
         .sheet(item: $model.sheet) { sheet in
-            RepositorySheetView(sheet: sheet, model: model)
+            if case .interactiveRebase(let base, let commits) = sheet {
+                InteractiveRebaseView(model: model, base: base, commits: commits)
+            } else {
+                RepositorySheetView(sheet: sheet, model: model)
+            }
+        }
+        .confirmationDialog(
+            "Reset --hard to \(model.confirmHardReset?.shortID ?? "")?",
+            isPresented: Binding(get: { model.confirmHardReset != nil }, set: { if !$0 { model.confirmHardReset = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Reset --hard", role: .destructive) {
+                if let c = model.confirmHardReset { Task { await model.reset(to: c, mode: .hard) } }
+            }
+        } message: {
+            Text("Uncommitted changes will be lost permanently. The commits stay in the reflog, and you can restore the branch with the Undo button.")
         }
         .confirmationDialog(
             forceDeleteTitle,
@@ -174,6 +193,15 @@ struct RepositoryView: View {
 
         ToolbarItemGroup {
             Button {
+                Task { await model.undo() }
+            } label: {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+            }
+            .keyboardShortcut("z", modifiers: [.command, .option])
+            .help(undoHelp)
+            .disabled(!model.canUndo)
+
+            Button {
                 Task {
                     await model.reload()
                     await model.refreshHosting()
@@ -192,6 +220,13 @@ struct RepositoryView: View {
             .keyboardShortcut("i", modifiers: [.command, .option])
             .help("Show or hide the inspector (⌥⌘I)")
         }
+    }
+
+    private var undoHelp: String {
+        if model.operation != nil { return "Abort the operation and restore everything as it was (⌥⌘Z)" }
+        guard let action = model.undoAction else { return "Nothing to undo" }
+        let when = action.date.formatted(.relative(presentation: .named))
+        return "Undo “\(action.message)” (\(when)), ⌥⌘Z. Pressing again restores the previous state."
     }
 
     private var pullTitle: String {

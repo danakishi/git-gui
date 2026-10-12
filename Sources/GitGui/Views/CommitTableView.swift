@@ -24,6 +24,8 @@ struct CommitTableView: NSViewRepresentable {
     let onReachEnd: () -> Void
     /// Row context menu; `nil` means no menu.
     var contextMenu: ((Commit) -> NSMenu?)?
+    /// The `source` row was dragged onto the `target` row; `nil` means dragging is disabled.
+    var onDrop: ((_ source: Commit, _ target: Commit) -> Void)?
 
     nonisolated static let rowHeight: CGFloat = 24
 
@@ -42,6 +44,9 @@ struct CommitTableView: NSViewRepresentable {
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
+        table.registerForDraggedTypes([.gitguiCommit])
+        table.setDraggingSourceOperationMask(.move, forLocal: true)
+        table.draggingDestinationFeedbackStyle = .regular
 
         for spec in Column.allCases {
             let column = NSTableColumn(identifier: spec.id)
@@ -217,6 +222,37 @@ struct CommitTableView: NSViewRepresentable {
             }
         }
 
+        // MARK: Dragging a row onto a row
+
+        func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+            guard parent.onDrop != nil, row < parent.commits.count else { return nil }
+            let item = NSPasteboardItem()
+            item.setString(parent.commits[row].id, forType: .gitguiCommit)
+            return item
+        }
+
+        func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
+                       proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+            // Only rows of this same table, and only "on" a row, not between rows.
+            guard info.draggingSource as? NSTableView === tableView, row < parent.commits.count,
+                  let sha = info.draggingPasteboard.string(forType: .gitguiCommit),
+                  sha != parent.commits[row].id else { return [] }
+            tableView.setDropRow(row, dropOperation: .on)
+            return .move
+        }
+
+        func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
+                       dropOperation: NSTableView.DropOperation) -> Bool {
+            guard row < parent.commits.count,
+                  let sha = info.draggingPasteboard.string(forType: .gitguiCommit),
+                  let source = parent.commits.first(where: { $0.id == sha }) else { return false }
+            let target = parent.commits[row]
+            let onDrop = parent.onDrop
+            // Show the menu after AppKit finishes the drag.
+            DispatchQueue.main.async { onDrop?(source, target) }
+            return true
+        }
+
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !isSyncingSelection else { return }
             let row = table.selectedRow
@@ -228,6 +264,11 @@ struct CommitTableView: NSViewRepresentable {
             }
         }
     }
+}
+
+extension NSPasteboard.PasteboardType {
+    /// Sha of the commit being dragged across the graph.
+    static let gitguiCommit = NSPasteboard.PasteboardType("com.danakishi.gitgui.commit")
 }
 
 // MARK: Context menu

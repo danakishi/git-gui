@@ -177,10 +177,11 @@ struct OperationsTests {
         defer { GitRunner.observer = nil }
         try await repo.stageAll()
         _ = try await repo.status()
-        let seen = box.all
+        // The observer is global: parallel test suites write to it too.
+        // We take only our own directory — which also checks that it was recorded.
+        let seen = box.all.filter { $0.directory == dir }
         #expect(seen.contains { $0.arguments.first == "add" && $0.isMutating })
         #expect(seen.contains { $0.arguments.first == "status" && !$0.isMutating })
-        #expect(seen.allSatisfy { $0.directory == dir })
     }
 
     @Test func readOnlySubcommandsAreNotMutating() {

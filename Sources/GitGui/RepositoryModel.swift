@@ -30,6 +30,10 @@ final class RepositoryModel {
     private(set) var head: Head?
     private(set) var status: WorkingTreeStatus?
     private(set) var stashes: [StashEntry] = []
+    /// An unfinished merge/rebase/cherry-pick/revert.
+    private(set) var operation: OperationState?
+    /// What "Undo" will do.
+    private(set) var undoAction: UndoAction?
     private(set) var isLoading = false
     private(set) var error: String?
 
@@ -79,6 +83,8 @@ final class RepositoryModel {
     /// The open input sheet (new branch, tag, stash) and the branch awaiting delete confirmation.
     var sheet: RepositorySheet?
     var confirmForceDelete: Ref?
+    /// A reset --hard awaiting confirmation.
+    var confirmHardReset: Commit?
 
     /// PRs/MRs and CI from GitHub or GitLab.
     let hosting = HostingState()
@@ -104,8 +110,10 @@ final class RepositoryModel {
 
     var isFiltering: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    /// Files with a conflict are excluded, even though git considers them changed in the index:
+    /// unstaging them would silently resolve the conflict in favour of HEAD.
     var stagedFiles: [WorkingFile] {
-        (status?.entries ?? []).filter(\.isStaged).map { WorkingFile(entry: $0, staged: true) }
+        (status?.entries ?? []).filter { $0.isStaged && !$0.isConflict }.map { WorkingFile(entry: $0, staged: true) }
     }
 
     var unstagedFiles: [WorkingFile] {
@@ -171,7 +179,11 @@ final class RepositoryModel {
             async let h = repo.head()
             async let s = repo.status()
             async let st = repo.stashList()
+            async let op = repo.operationState()
+            async let u = repo.undoAction()
             let (commits, refs, head, status, stashes) = try await (c, r, h, s, st)
+            self.operation = try await op
+            self.undoAction = try? await u
             self.commits = commits
             self.refs = refs
             self.head = head
@@ -293,7 +305,21 @@ final class RepositoryModel {
     // Index
 
     func stage(_ files: [WorkingFile]) async {
+        // A conflicted file in the index counts as "resolved". With markers inside,
+        // it's easy to commit garbage, so check the content first.
+        let unresolved = files.filter { $0.entry.isConflict && hasConflictMarkers($0.entry.path) }.map(\.entry.path)
+        guard unresolved.isEmpty else {
+            error = "\(unresolved.joined(separator: ", ")) still contains conflict markers (<<<<<<<). Remove them or choose one of the versions."
+            return
+        }
         await perform("Staging") { try await repo.stage(files.map(\.entry.path)) }
+    }
+
+    private func hasConflictMarkers(_ path: String) -> Bool {
+        guard let text = try? String(contentsOf: repo.workingDirectory.appending(path: path), encoding: .utf8) else {
+            return false
+        }
+        return text.hasPrefix("<<<<<<< ") || text.contains("\n<<<<<<< ")
     }
 
     func unstage(_ files: [WorkingFile]) async {
@@ -301,11 +327,22 @@ final class RepositoryModel {
     }
 
     func stageAll() async {
-        await perform("Staging all") { try await repo.stageAll() }
+        if conflictCount > 0 {
+            // `add -A` would mark files with markers as resolved too: go file by file with a check.
+            await stage(unstagedFiles)
+        } else {
+            await perform("Staging all") { try await repo.stageAll() }
+        }
     }
 
     func unstageAll() async {
-        await perform("Unstaging all") { try await repo.unstageAll() }
+        // `git reset` in the middle of a merge/rebase silently discards their state,
+        // so in that case only regular files are unstaged.
+        if operation != nil {
+            await unstage(stagedFiles)
+        } else {
+            await perform("Unstaging all") { try await repo.unstageAll() }
+        }
     }
 
     func stageHunk(_ hunk: DiffHunk, of file: FileDiff) async {
@@ -477,6 +514,132 @@ final class RepositoryModel {
     /// Shows a stash in the inspector as a commit.
     func show(_ entry: StashEntry) {
         selectedCommitID = entry.sha
+    }
+
+    // History: merge, rebase, cherry-pick, reset
+
+    /// Name for referring to a commit in commands and menus: local branch, remote branch, otherwise short sha.
+    func name(for commit: Commit) -> String {
+        let refs = refsByCommit[commit.id] ?? []
+        return refs.first { $0.kind == .localBranch && !$0.isHead }?.shortName
+            ?? refs.first { $0.kind == .localBranch }?.shortName
+            ?? refs.first { $0.kind == .remoteBranch }?.shortName
+            ?? commit.shortID
+    }
+
+    /// Local branch at a commit: non-current ones first.
+    func localBranch(at sha: String) -> String? {
+        let refs = (refsByCommit[sha] ?? []).filter { $0.kind == .localBranch }
+        return (refs.first { !$0.isHead } ?? refs.first)?.shortName
+    }
+
+    func merge(_ rev: String, mode: MergeMode = .auto) async {
+        let into = currentBranch ?? "HEAD"
+        await perform("Merging \(rev) into \(into)") { try await repo.merge(rev, mode: mode) }
+    }
+
+    /// Switches to `branch` and merges `rev` into it.
+    func merge(_ rev: String, into branch: String) async {
+        await perform("Merging \(rev) into \(branch)") {
+            try await repo.checkout(branch: branch)
+            try await repo.merge(rev)
+        }
+    }
+
+    /// Rebases `branch` (the current one by default) onto `upstream`.
+    func rebase(onto upstream: String, branch: String? = nil) async {
+        let what = branch ?? currentBranch ?? "HEAD"
+        await perform("Rebasing \(what) onto \(upstream)") { try await repo.rebase(onto: upstream, branch: branch) }
+    }
+
+    func fastForward(branch: String, to rev: String) async {
+        if branch == currentBranch {
+            await merge(rev, mode: .fastForwardOnly)
+        } else {
+            await perform("Fast-forwarding \(branch)") { try await repo.fastForward(branch: branch, to: rev) }
+        }
+    }
+
+    func cherryPick(_ commit: Commit) async {
+        await perform("Cherry-pick \(commit.shortID)") { try await repo.cherryPick(commit.id, isMerge: commit.isMerge) }
+    }
+
+    func revert(_ commit: Commit) async {
+        await perform("Revert \(commit.shortID)") { try await repo.revert(commit.id, isMerge: commit.isMerge) }
+    }
+
+    /// Reset of the current branch. For `hard`, the UI asks for confirmation beforehand.
+    func reset(to commit: Commit, mode: ResetMode) async {
+        await perform("Reset --\(mode.rawValue) to \(commit.shortID)") { try await repo.reset(to: commit.id, mode: mode) }
+    }
+
+    func continueOperation() async {
+        guard let op = operation else { return }
+        await perform("Continuing") { try await repo.continueOperation(op.kind) }
+    }
+
+    func skipOperation() async {
+        guard let op = operation else { return }
+        await perform("Skipping commit") { try await repo.skipOperation(op.kind) }
+    }
+
+    func abortOperation() async {
+        guard let op = operation else { return }
+        await perform("Aborting") { try await repo.abortOperation(op.kind) }
+    }
+
+    func resolveConflict(_ files: [WorkingFile], ours: Bool) async {
+        await perform(ours ? "Taking HEAD version" : "Taking incoming version") {
+            for f in files { try await repo.resolveConflict(f.entry.path, ours: ours) }
+        }
+    }
+
+    var conflictCount: Int {
+        status?.entries.filter(\.isConflict).count ?? 0
+    }
+
+    /// During an unfinished merge/rebase, undo means "Abort":
+    /// the reflog at that point no longer describes the user's last action.
+    func undo() async {
+        if operation != nil {
+            await abortOperation()
+            return
+        }
+        guard let action = undoAction else { return }
+        await perform("Undoing “\(action.message)”") { try await repo.undo(action) }
+    }
+
+    var canUndo: Bool {
+        busy == nil && (operation != nil || undoAction != nil)
+    }
+
+    /// Opens the interactive rebase window for commits from `commit` to HEAD.
+    func beginInteractiveRebase(from commit: Commit) async {
+        guard let head = head?.sha else { return }
+        do {
+            guard try await repo.isAncestor(commit.id, of: head) else {
+                error = "Commit \(commit.shortID) is not in the current branch's history"
+                return
+            }
+            let base = commit.parents.first
+            let range = try await repo.commits(from: base)
+            if range.contains(where: \.isMerge) {
+                error = "There are merge commits between \(commit.shortID) and HEAD: interactive rebase would not preserve them"
+                return
+            }
+            sheet = .interactiveRebase(base: base, commits: range)
+        } catch {
+            self.error = String(describing: error)
+        }
+    }
+
+    func interactiveRebase(base: String?, steps: [RebaseStep]) async {
+        await perform("Interactive rebase") { try await repo.interactiveRebase(base: base, steps: steps) }
+    }
+
+    /// Opens a working tree file in the default app.
+    func openFile(_ path: String) {
+        NSWorkspace.shared.open(repo.workingDirectory.appending(path: path))
     }
 
     // Hosting provider

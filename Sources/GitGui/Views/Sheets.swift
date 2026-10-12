@@ -7,6 +7,8 @@ enum RepositorySheet: Identifiable {
     case renameBranch(Ref)
     case newTag(at: String?)
     case stash
+    /// Commits from oldest to newest; `base == nil` means from the root.
+    case interactiveRebase(base: String?, commits: [Commit])
 
     var id: String {
         switch self {
@@ -14,6 +16,7 @@ enum RepositorySheet: Identifiable {
         case .renameBranch(let r): "rename:\(r.id)"
         case .newTag(let s): "tag:\(s ?? "")"
         case .stash: "stash"
+        case .interactiveRebase(let base, _): "rebase:\(base ?? "")"
         }
     }
 }
@@ -47,6 +50,9 @@ struct RepositorySheetView: View {
             case .stash:
                 TextField("Message (optional)", text: $name).focused($nameFocused)
                 Toggle("Include untracked files", isOn: $flag)
+            case .interactiveRebase:
+                // Has its own window, see InteractiveRebaseView.
+                EmptyView()
             }
             HStack {
                 Spacer()
@@ -71,6 +77,7 @@ struct RepositorySheetView: View {
         case .renameBranch(let r): "Rename “\(r.shortName)”"
         case .newTag: "New Tag"
         case .stash: "Stash Changes"
+        case .interactiveRebase: "Interactive Rebase"
         }
     }
 
@@ -80,7 +87,7 @@ struct RepositorySheetView: View {
         case .newBranch(nil): "From current HEAD"
         case .newTag(let at?): "On commit \(at.prefix(8))"
         case .newTag(nil): "On current HEAD"
-        case .renameBranch, .stash: nil
+        case .renameBranch, .stash, .interactiveRebase: nil
         }
     }
 
@@ -90,6 +97,7 @@ struct RepositorySheetView: View {
         case .renameBranch: "Rename"
         case .newTag: "Create"
         case .stash: "Stash"
+        case .interactiveRebase: "Start"
         }
     }
 
@@ -108,6 +116,7 @@ struct RepositorySheetView: View {
             case .renameBranch(let ref): await model.renameBranch(ref.shortName, to: n)
             case .newTag(let at): await model.createTag(n, at: at, message: message)
             case .stash: await model.stashPush(message: n, includeUntracked: flag)
+            case .interactiveRebase: break
             }
         }
     }

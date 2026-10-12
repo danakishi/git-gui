@@ -169,8 +169,18 @@ struct WorkingTreeView: View {
     @ViewBuilder
     private func fileMenu(_ files: [WorkingFile]) -> some View {
         let staged = files.filter(\.staged), unstaged = files.filter { !$0.staged }
+        let conflicts = files.filter(\.entry.isConflict)
+        if !conflicts.isEmpty {
+            // During a rebase, HEAD is the branch being rebased onto, and incoming is the commit being replayed.
+            Button("Take HEAD Version (ours)") { Task { await model.resolveConflict(conflicts, ours: true) } }
+            Button("Take Incoming Version (theirs)") { Task { await model.resolveConflict(conflicts, ours: false) } }
+            if conflicts.count == 1 {
+                Button("Open in Editor") { model.openFile(conflicts[0].entry.path) }
+            }
+            Divider()
+        }
         if !unstaged.isEmpty {
-            Button("Stage") { Task { await model.stage(unstaged) } }
+            Button(conflicts.isEmpty ? "Stage" : "Mark as Resolved") { Task { await model.stage(unstaged) } }
         }
         if !staged.isEmpty {
             Button("Unstage") { Task { await model.unstage(staged) } }
