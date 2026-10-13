@@ -22,21 +22,23 @@ struct SidebarView: View {
         @Bindable var store = store
         List(selection: $store.selectedID) {
             if !store.favorites.isEmpty {
-                Section(isExpanded: expanded(RepositoryStore.favoritesKey)) {
-                    rows(store.favorites)
+                Section {
+                    if store.isExpanded(RepositoryStore.favoritesKey) { rows(store.favorites) }
                 } header: {
-                    Text("Favorites")
+                    header("Favorites", key: RepositoryStore.favoritesKey)
                 }
             }
             ForEach(store.groups, id: \.self) { group in
-                Section(isExpanded: expanded(group)) {
-                    let list = store.entries(in: group)
-                    rows(list)
-                    if list.isEmpty {
-                        Text("Empty").foregroundStyle(.tertiary).selectionDisabled()
+                Section {
+                    if store.isExpanded(group) {
+                        let list = store.entries(in: group)
+                        rows(list)
+                        if list.isEmpty {
+                            Text("Empty").foregroundStyle(.tertiary).selectionDisabled()
+                        }
                     }
                 } header: {
-                    Text(group)
+                    header(group, key: group)
                         .contextMenu { groupMenu(group) }
                         .dropDestination(for: URL.self) { urls, _ in
                             Task { for u in urls { await store.add(u, group: group) } }
@@ -139,8 +141,25 @@ struct SidebarView: View {
             .help("The repositories stay in the list, ungrouped")
     }
 
-    private func expanded(_ key: String) -> Binding<Bool> {
-        Binding(get: { store.isExpanded(key) }, set: { store.setExpanded(key, $0) })
+    /// A collapsible section header. `Section(isExpanded:)` draws its own disclosure chevron
+    /// over the start of the title in the sidebar, so the chevron here sits after the title instead.
+    private func header(_ title: String, key: String) -> some View {
+        let isExpanded = store.isExpanded(key)
+        return Button {
+            withAnimation { store.setExpanded(key, !isExpanded) }
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded ? "Collapse" : "Expand")
     }
 
     private func prompt(_ p: GroupPrompt) {
