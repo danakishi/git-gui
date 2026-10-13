@@ -33,6 +33,8 @@ struct WorkingTreeView: View {
             CommitForm(model: model)
                 .frame(minHeight: 150, idealHeight: 150, maxHeight: 260)
         }
+        // Without this the split view keeps its ideal width and sits centered in a wider inspector.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: focused?.id) {
             diff = nil
             guard let focused else { return }
