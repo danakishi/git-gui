@@ -325,7 +325,7 @@ private struct CommitForm: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canCommit || model.busy != nil)
-                .help("Commit (⌘↩)")
+                .help(model.commitsAll ? "Stage all changes and commit (⌘↩)" : "Commit (⌘↩)")
             }
         }
         .padding(8)
@@ -333,6 +333,7 @@ private struct CommitForm: View {
 
     private var buttonTitle: String {
         if model.amend { return "Amend Commit" }
+        if model.commitsAll { return "Commit All (\(model.unstagedFiles.count))" }
         let n = model.stagedFiles.count
         return n == 0 ? "Commit" : "Commit (\(n))"
     }

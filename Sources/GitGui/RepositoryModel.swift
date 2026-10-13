@@ -398,13 +398,21 @@ final class RepositoryModel {
 
     var canCommit: Bool {
         !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (amend || !stagedFiles.isEmpty)
+            && (amend || !stagedFiles.isEmpty || commitsAll)
+    }
+
+    /// With nothing staged, a commit stages every change first, like `git commit -a` plus untracked files.
+    /// Not during conflicts: `add -A` would mark files with markers as resolved.
+    var commitsAll: Bool {
+        !amend && stagedFiles.isEmpty && !unstagedFiles.isEmpty && conflictCount == 0
     }
 
     func commit() async {
         let message = commitMessage
         let amend = amend
+        let stageFirst = commitsAll
         let ok = await perform(amend ? "Amending commit" : "Creating commit") {
+            if stageFirst { try await repo.stageAll() }
             try await repo.commit(message: message, amend: amend)
         }
         if ok {
