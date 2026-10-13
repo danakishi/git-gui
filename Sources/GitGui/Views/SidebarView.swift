@@ -1,3 +1,4 @@
+import GitCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -74,6 +75,10 @@ struct SidebarView: View {
             Task { for u in urls { await store.add(u) } }
             return true
         }
+        .task { await store.refreshHeads() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await store.refreshHeads() }
+        }
         .overlay {
             if store.entries.isEmpty, store.groups.isEmpty {
                 ContentUnavailableView {
@@ -94,10 +99,23 @@ struct SidebarView: View {
 
     private func rows(_ entries: [RepositoryEntry]) -> some View {
         ForEach(entries) { entry in
-            Label(entry.name, systemImage: "shippingbox")
-                .help(entry.path)
-                .tag(entry.id)
-                .contextMenu { entryMenu(entry) }
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.name)
+                    if let head = store.heads[entry.id] {
+                        Text(head.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            } icon: {
+                Image(systemName: "shippingbox")
+            }
+            .help(entry.path)
+            .tag(entry.id)
+            .contextMenu { entryMenu(entry) }
         }
     }
 

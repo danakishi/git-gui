@@ -12,8 +12,10 @@ struct ContentView: View {
             SidebarView()
         } detail: {
             if let entry = store.selected {
-                RepositoryView(model: store.model(for: entry))
+                let model = store.model(for: entry)
+                RepositoryView(model: model)
                     .id(entry.id)
+                    .onChange(of: model.head, initial: true) { store.setHead(model.head, for: entry.id) }
             } else {
                 ContentUnavailableView {
                     Label {
@@ -158,9 +160,12 @@ struct RepositoryView: View {
             Button {
                 model.showBranches.toggle()
             } label: {
-                Label("Branches", systemImage: "list.bullet.indent")
+                // The current branch by name, so it is visible at a glance; the icon matches its badge in the list.
+                Label(model.head?.displayName ?? "Branches", systemImage: branchIcon)
+                    .labelStyle(.titleAndIcon)
+                    .frame(maxWidth: 240)
             }
-            .help("Branches and tags (⌘B)")
+            .help(branchHelp)
             .popover(isPresented: $model.showBranches, arrowEdge: .bottom) { BranchesPopover(model: model) }
 
             Button {
@@ -230,6 +235,22 @@ struct RepositoryView: View {
         }
     }
 
+    private var branchIcon: String {
+        switch model.head {
+        case .branch, nil: "checkmark"
+        case .detached: "exclamationmark.triangle"
+        case .unborn: "circle.dashed"
+        }
+    }
+
+    private var branchHelp: String {
+        switch model.head {
+        case .branch(let name, _): "Current branch: \(name). Branches and tags (⌘B)"
+        case .detached: "HEAD is detached: new commits won't belong to any branch. Branches and tags (⌘B)"
+        default: "Branches and tags (⌘B)"
+        }
+    }
+
     private var undoHelp: String {
         if model.operation != nil { return "Abort the operation and restore everything as it was (⌥⌘Z)" }
         guard let action = model.undoAction else { return "Nothing to undo" }
@@ -249,12 +270,7 @@ struct RepositoryView: View {
 
     private var subtitle: String {
         var parts: [String] = []
-        switch model.head {
-        case .branch(let name, _): parts.append(name)
-        case .detached(let sha): parts.append("detached @ \(sha.prefix(8))")
-        case .unborn(let b): parts.append("\(b) (empty)")
-        case nil: break
-        }
+        if let head = model.head { parts.append(head.displayName) }
         if let s = model.status {
             if s.ahead > 0 { parts.append("↑\(s.ahead)") }
             if s.behind > 0 { parts.append("↓\(s.behind)") }
@@ -263,6 +279,17 @@ struct RepositoryView: View {
             parts.append("\(model.commits.count)\(model.hasMore ? "+" : "") \(model.commits.count == 1 && !model.hasMore ? "commit" : "commits")")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+extension Head {
+    /// How HEAD is named in the title bar, the toolbar, and the sidebar.
+    var displayName: String {
+        switch self {
+        case .branch(let name, _): name
+        case .detached(let sha): "detached @ \(sha.prefix(8))"
+        case .unborn(let b): "\(b) (empty)"
+        }
     }
 }
 

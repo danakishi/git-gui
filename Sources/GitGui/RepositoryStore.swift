@@ -48,6 +48,9 @@ final class RepositoryStore {
     var lastError: String?
     /// The ⌘K palette is open.
     var showPalette = false
+    /// Where HEAD is in each repository, for the sidebar. The open repository updates its own
+    /// entry on every reload; the rest are reread when the app becomes active.
+    private(set) var heads: [RepositoryEntry.ID: Head] = [:]
 
     static let favoritesKey = "\u{0}favorites"
 
@@ -79,6 +82,20 @@ final class RepositoryStore {
     }
 
     var selectedModel: RepositoryModel? { selected.map(model(for:)) }
+
+    func setHead(_ head: Head?, for id: RepositoryEntry.ID) {
+        if heads[id] != head { heads[id] = head }
+    }
+
+    /// Rereads HEAD of every repository in the list: a branch may have been switched in a terminal.
+    func refreshHeads() async {
+        await withTaskGroup(of: (RepositoryEntry.ID, Head?).self) { group in
+            for entry in entries {
+                group.addTask { (entry.id, try? await GitRepository(entry.url).head()) }
+            }
+            for await (id, head) in group { setHead(head, for: id) }
+        }
+    }
 
     var favorites: [RepositoryEntry] { entries.filter(\.isFavorite) }
 
@@ -116,11 +133,13 @@ final class RepositoryStore {
         sortEntries()
         selectedID = entry.id
         save()
+        setHead(try? await repo.head(), for: entry.id)
     }
 
     func remove(_ id: RepositoryEntry.ID) {
         entries.removeAll { $0.id == id }
         models[id] = nil
+        heads[id] = nil
         if selectedID == id { selectedID = orderedEntries.first?.id }
         save()
     }
